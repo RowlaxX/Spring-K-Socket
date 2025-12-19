@@ -9,6 +9,7 @@ import kotlin.reflect.KClass
 @Component
 annotation class WebSocketClient(
 
+    val name: String = "",
     val initializer: KClass<*> = Unit::class,
 
     val replaceDuration: Long = 3,

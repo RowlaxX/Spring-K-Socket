@@ -1,4 +1,4 @@
-package fr.rowlaxx.marketdata.lib.websocket.model
+package fr.rowlaxx.springwebsocketaop.data
 
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
@@ -14,5 +14,6 @@ class WebSocketAttributes {
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun <T> putIfAbsent(key: WebSocketAttribute<T>, value: Any): T = attributes.computeIfAbsent(key::class) { value } as T
+    fun <T> computeIfAbsent(key: WebSocketAttribute<T>, supplier: () -> T): T = attributes.computeIfAbsent(key::class) { supplier() as Any } as T
+
 }

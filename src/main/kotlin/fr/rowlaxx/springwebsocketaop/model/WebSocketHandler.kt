@@ -1,13 +1,12 @@
-package fr.rowlaxx.marketdata.lib.websocket.model
-
-import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
+package fr.rowlaxx.springwebsocketaop.model
 
 interface WebSocketHandler {
 
-    fun onInitError(webSocket: WebSocket, reason: WebSocketException) {}
+    fun onAvailable(webWebSocket: WebSocket) {}
 
-    fun onOpen(webSocket: WebSocket) {}
-    fun onMessage(webSocket: WebSocket, text: String) {}
-    fun onClose(webSocket: WebSocket, reason: WebSocketException) {}
+    fun onBinaryMessage(webSocket: WebSocket, data: ByteArray)  {}
+    fun onTextMessage(webSocket: WebSocket, text: String) {}
+
+    fun onUnavailable(webSocket: WebSocket) {}
 
 }

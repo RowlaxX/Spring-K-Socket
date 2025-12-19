@@ -1,7 +1,5 @@
-package fr.rowlaxx.marketdata.lib.websocket.service.io
+package fr.rowlaxx.springwebsocketaop.service.io
 
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
 import fr.rowlaxx.marketdata.common.log.log
 import fr.rowlaxx.marketdata.lib.synchronizer.model.Synchronizer
 import fr.rowlaxx.marketdata.lib.synchronizer.service.SynchronizerFactoryService
@@ -10,7 +8,14 @@ import fr.rowlaxx.springwebsocketaop.exception.WebSocketConnectionException
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketCreationException
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
 import fr.rowlaxx.marketdata.lib.websocket.model.*
+import fr.rowlaxx.springwebsocketaop.data.WebSocketAttribute
+import fr.rowlaxx.springwebsocketaop.data.WebSocketAttributes
+import fr.rowlaxx.springwebsocketaop.data.WebSocketClientConfiguration
+import fr.rowlaxx.springwebsocketaop.model.WebSocket
+import fr.rowlaxx.springwebsocketaop.model.WebSocketHandler
 import org.springframework.stereotype.Service
+import tools.jackson.databind.JsonNode
+import tools.jackson.databind.ObjectMapper
 import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
@@ -19,7 +24,6 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicLong
 
 @Service
@@ -44,31 +48,12 @@ class WebSocketFactoryService(
         return objectMapper.writeValueAsString(obj)
     }
 
-    fun create(
-        configuration: WebSocketConfiguration,
-        handler: WebSocketHandler,
-    ) = create(
-        uri = configuration.uri,
-        name = configuration.name,
-        handler = handler,
-        pingInterval = configuration.pingInterval,
-        connectTimeout = configuration.connectTimeout,
-        readTimeout = configuration.readTimeout,
-        headers = configuration.headers
-    )
-
-    fun create(
-        uri: URI,
+    fun connect(
         name: String,
-        headers: Map<String, String?>? = null,
-        pingInterval: Duration = Duration.ofSeconds(5),
-        connectTimeout: Duration = Duration.ofSeconds(10),
-        readTimeout: Duration = Duration.ofSeconds(10),
+        configuration: WebSocketClientConfiguration,
         handler: WebSocketHandler,
     ): Long {
-        if (pingInterval.isNegative || connectTimeout.isNegative || readTimeout.isNegative) {
-            throw IllegalArgumentException("Ping, connect and read timeout must be positive")
-        }
+
 
         val id = idCounter.getAndIncrement()
         log.debug("[{} ({})] Creating : {}", name, id, uri)
@@ -124,14 +109,7 @@ class WebSocketFactoryService(
     ) : WebSocket {
         private var sending = false
         private val sendingQueue = LinkedList<Pair<CompletableFuture<Unit>, () -> CompletableFuture<*>>>()
-        private var closedWith: Exception? = null
-        private var opened: Boolean = false
         private var javaWebSocket: java.net.http.WebSocket? = null
-
-        init {
-            attributes[LastIn] = Instant.now()
-            attributes[LastOut] = Instant.now()
-        }
 
         fun accept(ws: java.net.http.WebSocket) {
             if (isClosed() || javaWebSocket != null) {
@@ -154,45 +132,6 @@ class WebSocketFactoryService(
             handler.onMessage(this, message)
         }
 
-        fun closeWith(exception: WebSocketException) {
-            if (isClosed()) {
-                return
-            }
-
-            javaWebSocket?.abort()
-            opened = false
-            closedWith = exception
-
-            when (exception) {
-                is WebSocketClosedException -> {
-                    log.debug("[{} ({})] Closed : {}", name, id, exception.message)
-                    handler.onClose(this, exception)
-                }
-                is WebSocketConnectionException -> {
-                    log.error("[{} ({})] Connection error : {}", name, id, exception.message)
-                    handler.onClose(this, exception)
-                }
-                is WebSocketCreationException -> {
-                    log.error("[{} ({})] Init Error : {}", name, id, exception.message)
-                    handler.onInitError(this, exception)
-                }
-            }
-        }
-
-        override fun isClosed(): Boolean {
-            return closedWith != null
-        }
-
-        override fun isOpen(): Boolean {
-            return opened
-        }
-
-        override fun closeAsync(reason: String): CompletableFuture<Unit> {
-            return runInSync {
-                closeWith(WebSocketClosedException("Closed by client : $reason"))
-            }
-        }
-
         override fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
             val cf = CompletableFuture<Unit>()
             runInSync {
@@ -209,8 +148,8 @@ class WebSocketFactoryService(
             return cf
         }
 
-        private fun doOutNow(result: CompletableFuture<Unit>, action: () -> CompletableFuture<*>, redirectToQueue: Boolean) {
-            if (!isOpen() || sending) {
+        private fun doOutNow(result: CompletableFuture<Unit>, action: () -> CompletableFuture<*>) {
+            if (!isOpened() || sending) {
                 if (redirectToQueue) {
                     sendingQueue.add(result to action)
                 }
@@ -239,93 +178,5 @@ class WebSocketFactoryService(
                 }
             }}
         }
-
-        fun poll() {
-            if (!opened || isClosed()) {
-                return
-            }
-
-            val lastIn = attributes[LastIn]!!
-            val lastOut = attributes[LastOut]!!
-            val now = Instant.now()
-
-            if (lastIn + readTimeout < now) {
-                closeWith(WebSocketClosedException("Read timeout"))
-            }
-            else if (maxOf(lastIn, lastOut) + pingInterval < now) {
-                doOutNow(
-                    result = CompletableFuture<Unit>(),
-                    action = { javaWebSocket!!.sendPing(ByteBuffer.allocate(0)) },
-                    redirectToQueue = false
-                )
-            }
-        }
-    }
-
-    private class InternalJavaListener(
-        private val executeAsync: ((InternalWebSocket) -> Unit) -> Unit
-    ) : java.net.http.WebSocket.Listener {
-        private var text: StringBuilder = StringBuilder()
-
-        override fun onText(webSocket: java.net.http.WebSocket, data: CharSequence, lastData: Boolean): CompletionStage<*> {
-            val canFree = CompletableFuture<Unit>()
-
-            executeAsync {
-                try {
-                    it.attributes[LastIn] = Instant.now()
-
-                    if (text.isEmpty() && lastData) {
-                        it.acceptMessage(data.toString())
-                    }
-                    else {
-                        text.append(data)
-
-                        if (lastData) {
-                            val result = text.toString()
-                            text = StringBuilder()
-                            it.acceptMessage(result)
-                        }
-                    }
-                } finally {
-                    webSocket.request(1)
-                    canFree.complete(Unit)
-                }
-            }
-
-            return canFree
-        }
-
-        override fun onClose(webSocket: java.net.http.WebSocket, statusCode: Int, reason: String?): CompletionStage<*>? {
-            executeAsync { it.closeWith(WebSocketClosedException("Closed by server : $reason ($statusCode)")) }
-            webSocket.request(1)
-            return null
-        }
-
-        override fun onError(webSocket: java.net.http.WebSocket, error: Throwable?) {
-            executeAsync { it.closeWith(
-                WebSocketConnectionException(
-                    error?.message ?: "Connection error : ${error?.message}"
-                )
-            ) }
-            webSocket.request(1)
-        }
-
-        override fun onOpen(webSocket: java.net.http.WebSocket) {
-            executeAsync { it.accept(webSocket) }
-            webSocket.request(1)
-        }
-
-        override fun onPing(webSocket: java.net.http.WebSocket, message: ByteBuffer): CompletionStage<*>? {
-            executeAsync { it.attributes[LastIn] = Instant.now() }
-            webSocket.request(1)
-            return null
-        }
-
-        override fun onPong(webSocket: java.net.http.WebSocket, message: ByteBuffer): CompletionStage<*>? {
-            executeAsync { it.attributes[LastIn] = Instant.now() }
-            webSocket.request(1)
-            return null
-        }
-
     }
 }

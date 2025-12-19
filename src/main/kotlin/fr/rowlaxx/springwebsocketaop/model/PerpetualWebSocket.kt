@@ -1,5 +1,6 @@
-package fr.rowlaxx.marketdata.lib.websocket.model
+package fr.rowlaxx.springwebsocketaop.model
 
+import fr.rowlaxx.springwebsocketaop.data.WebSocketAttributes
 import java.util.concurrent.CompletableFuture
 
 interface PerpetualWebSocket {

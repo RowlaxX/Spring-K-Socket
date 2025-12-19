@@ -7,8 +7,8 @@ import fr.rowlaxx.springwebsocketaop.annotation.OnConnected
 import fr.rowlaxx.springwebsocketaop.annotation.OnDisconnected
 import fr.rowlaxx.springwebsocketaop.annotation.OnMessage
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
-import fr.rowlaxx.marketdata.lib.websocket.model.PerpetualWebSocket
-import fr.rowlaxx.marketdata.lib.websocket.model.PerpetualWebSocketHandler
+import fr.rowlaxx.springwebsocketaop.model.PerpetualWebSocket
+import fr.rowlaxx.springwebsocketaop.model.PerpetualWebSocketHandler
 import org.springframework.stereotype.Service
 
 @Service

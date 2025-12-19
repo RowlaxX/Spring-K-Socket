@@ -3,6 +3,9 @@ package fr.rowlaxx.marketdata.lib.websocket.service.io
 import fr.rowlaxx.marketdata.common.log.log
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
 import fr.rowlaxx.marketdata.lib.websocket.model.*
+import fr.rowlaxx.springwebsocketaop.data.WebSocketAttribute
+import fr.rowlaxx.springwebsocketaop.model.WebSocket
+import fr.rowlaxx.springwebsocketaop.model.WebSocketHandler
 import org.springframework.stereotype.Service
 import java.time.Duration
 import java.util.concurrent.*

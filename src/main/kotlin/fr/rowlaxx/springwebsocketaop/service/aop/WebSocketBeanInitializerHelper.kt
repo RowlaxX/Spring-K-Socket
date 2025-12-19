@@ -5,9 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import fr.rowlaxx.marketdata.lib.reflection.MyReflectionUtils
 import fr.rowlaxx.marketdata.lib.websocket.annotation.*
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
-import fr.rowlaxx.marketdata.lib.websocket.model.WebSocket
-import fr.rowlaxx.marketdata.lib.websocket.model.WebSocketInitializer
-import fr.rowlaxx.marketdata.lib.websocket.model.WebSocketInitializerHandler
+import fr.rowlaxx.springwebsocketaop.model.WebSocket
 import fr.rowlaxx.springwebsocketaop.annotation.OnCancelled
 import fr.rowlaxx.springwebsocketaop.annotation.OnConnected
 import fr.rowlaxx.springwebsocketaop.annotation.OnInitialized

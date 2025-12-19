@@ -2,9 +2,8 @@ package fr.rowlaxx.marketdata.lib.websocket.service.aop
 
 import fr.rowlaxx.springwebsocketaop.annotation.WebSocketClient
 import fr.rowlaxx.springwebsocketaop.event.OnWebSocketsInitialized
-import fr.rowlaxx.marketdata.lib.websocket.model.PerpetualWebSocket
-import fr.rowlaxx.marketdata.lib.websocket.model.WebSocketConfiguration
-import fr.rowlaxx.marketdata.lib.websocket.model.WebSocketInitializerHandler
+import fr.rowlaxx.springwebsocketaop.model.PerpetualWebSocket
+import fr.rowlaxx.springwebsocketaop.data.WebSocketClientConfiguration
 import fr.rowlaxx.marketdata.lib.websocket.service.io.PerpetualWebSocketFactoryService
 import jakarta.annotation.PostConstruct
 import org.springframework.aop.support.AopUtils
@@ -39,7 +38,7 @@ class WebSocketBeanFactoryService(
             val shiftDuration = Duration.ofMillis(anno.shiftDurationUnit.toMillis(anno.shiftDuration))
             val replaceDuration = Duration.ofMillis(anno.replaceDurationUnit.toMillis(anno.replaceDuration))
             val handler = handlerHelper.extractHandler(bean)
-            var configuration: () -> WebSocketConfiguration
+            var configuration: () -> WebSocketClientConfiguration
             var initTimeout: Duration? = null
             var initializer: WebSocketInitializerHandler? = null
 
