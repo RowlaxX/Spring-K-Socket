@@ -11,7 +11,6 @@ import fr.rowlaxx.springwebsocketaop.model.PerpetualWebSocket
 import fr.rowlaxx.springwebsocketaop.model.PerpetualWebSocketHandler
 import fr.rowlaxx.springwebsocketaop.model.WebSocket
 import fr.rowlaxx.springwebsocketaop.model.WebSocketHandler
-import fr.rowlaxx.springwebsocketaop.service.io.WebSocketFactoryService
 import org.springframework.stereotype.Service
 import java.time.Duration
 import java.time.Instant

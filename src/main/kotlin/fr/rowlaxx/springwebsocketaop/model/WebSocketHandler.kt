@@ -4,8 +4,7 @@ interface WebSocketHandler {
 
     fun onAvailable(webWebSocket: WebSocket) {}
 
-    fun onBinaryMessage(webSocket: WebSocket, data: ByteArray)  {}
-    fun onTextMessage(webSocket: WebSocket, text: String) {}
+    fun onMessage(webSocket: WebSocket, msg: Any)  {}
 
     fun onUnavailable(webSocket: WebSocket) {}
 

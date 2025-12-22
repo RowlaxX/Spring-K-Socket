@@ -3,6 +3,7 @@ package fr.rowlaxx.springwebsocketaop.model
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketClosedException
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketConnectionException
 import fr.rowlaxx.springwebsocketaop.exception.WebSocketException
+import fr.rowlaxx.springwebsocketaop.utils.ByteBufferUtils.getBackingArray
 import tools.jackson.core.util.ByteArrayBuilder
 import java.net.http.WebSocket
 import java.net.http.WebSocketHandshakeException
@@ -51,10 +52,10 @@ class JavaWebSocketListener(
         onDataReceived()
 
         if (currentBinary.size() == 0 && last) {
-            onBinaryMessage(getBackingArray(data))
+            onBinaryMessage(data.getBackingArray())
         }
         else {
-            currentBinary.write(getBackingArray(data))
+            currentBinary.write(data.getBackingArray())
 
             if (last) {
                 val result = currentBinary.toByteArray()
@@ -86,13 +87,4 @@ class JavaWebSocketListener(
         return super.onText(webSocket, data, last)
     }
 
-    fun getBackingArray(buffer: ByteBuffer): ByteArray {
-        if (buffer.hasArray() && !buffer.isReadOnly()) {
-            return buffer.array().clone()
-        } else {
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            return bytes
-        }
-    }
 }

@@ -12,23 +12,29 @@ interface WebSocket {
     val id: Long
     val name: String
     val uri: URI
-    val pingInterval: Duration
+    val pingAfter: Duration
     val connectTimeout: Duration
     val readTimeout: Duration
+    val initTimeout: Duration
 
     val attributes: WebSocketAttributes
 
     val handlerChain: List<WebSocketHandler>
     val currentHandler: WebSocketHandler get() = handlerChain[currentHandlerIndex]
     val currentHandlerIndex: Int
+    val serializer: WebSocketSerializer
+    val deserializer: WebSocketDeserializer
 
-    fun completeCurrentHandler(): CompletableFuture<Unit>
+    val requestHeaders: HttpHeaders
+
+    fun completeHandlerAsync(): CompletableFuture<Unit>
     fun sendMessageAsync(message: Any): CompletableFuture<Unit>
     fun closeAsync(reason: String="Normal close", code: Int=1000): CompletableFuture<Unit>
 
-    fun isClosed(): Boolean = getClosedReason() != null
+    fun hasClosed(): Boolean = getClosedReason() != null
     fun getClosedReason(): WebSocketException?
-    fun isOpened(): Boolean
+    fun hasOpened(): Boolean
+    fun isConnected(): Boolean = hasOpened() && !hasClosed()
     fun isInitialized(): Boolean = currentHandlerIndex + 1 == handlerChain.size
 
 }

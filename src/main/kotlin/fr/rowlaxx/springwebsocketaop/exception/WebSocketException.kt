@@ -7,6 +7,6 @@ class WebSocketClosedException(
     val code: Int,
 ) : WebSocketException("$reason ($code)", null)
 
-class WebSocketTimeoutException(msg: String) : WebSocketException(msg, null)
+class WebSocketInitializationException(msg: String): WebSocketException(msg, null)
 class WebSocketConnectionException(msg: String) : WebSocketException(msg, null)
 class WebSocketCreationException(msg: String) : WebSocketException(msg, null)
