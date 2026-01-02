@@ -101,7 +101,7 @@ class BaseWebSocketFactory {
         private var nextInitTimeout: Future<*>? = null
         private var index: Int = 0
 
-        protected fun onDataReceived() {
+        fun onDataReceived() {
             val last = lastInData.get()
             val now = System.currentTimeMillis()
             val expired = last + 50 < now //Improve efficiency on large traffic websocket
@@ -111,6 +111,7 @@ class BaseWebSocketFactory {
                 nextPing = safeAsyncDelayed(pingAfter) {
                     unsafeSendNow(CompletableFuture(), this::pingNow)
                 }
+
                 nextReadTimeout?.cancel(true)
                 nextReadTimeout = safeAsyncDelayed(readTimeout) {
                     unsafeCloseWith(WebSocketConnectionException("Read timeout"))
@@ -156,6 +157,10 @@ class BaseWebSocketFactory {
             }
 
             closedWith = reason
+            nextReadTimeout?.cancel(true)
+            nextReadTimeout = null
+            nextPing?.cancel(true)
+            nextPing = null
             callback { handleClose() }
             factory.log.debug("[{} ({})] Closed : {}", name, id, reason.message)
             callback { currentHandler.onUnavailable(this) }
@@ -174,6 +179,7 @@ class BaseWebSocketFactory {
                 return
             }
 
+            onDataReceived()
             safeAsync {
                 if (hasClosed()) {
                     return@safeAsync
@@ -283,7 +289,7 @@ class BaseWebSocketFactory {
 
                     if (isInitialized()) {
                         nextInitTimeout?.cancel(true)
-                        nextReadTimeout = null
+                        nextInitTimeout = null
                     }
 
                     cf.complete(Unit)

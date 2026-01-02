@@ -40,13 +40,15 @@ class PerpetualWebSocketHandlerFactory() {
             unavailable = unavailable,
             message = onMessage,
             serializer = serializer,
-            deserializer = deserializer
+            deserializer = deserializer,
+            bean = bean
         )
     }
 
     private inner class InternalImplementation(
         override val deserializer: WebSocketDeserializer,
         override val serializer: WebSocketSerializer,
+        private val bean: Any,
         private val available: List<ReflectionUtils.InjectionScheme>,
         private val unavailable: List<ReflectionUtils.InjectionScheme>,
         private val message: List<ReflectionUtils.InjectionScheme>,
@@ -61,10 +63,26 @@ class PerpetualWebSocketHandlerFactory() {
         }
 
         override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {
-            val args = arrayOf(webSocket, msg)
+            val args1 = arrayOf(webSocket, msg)
+            var handled = false
 
-            message.filter { ReflectionUtils.canInject(it, *args) }
-                .forEach { runInWS(it, webSocket, *args) }
+            message.filter { ReflectionUtils.canInject(it, *args1) }
+                .apply { if (isNotEmpty()) handled = true }
+                .forEach { runInWS(it, webSocket, *args1) }
+
+            val deserialized = deserializer.fromStringOrByteArray(msg)
+
+            if (deserialized !== msg) {
+                val args2 = arrayOf(webSocket, deserialized)
+
+                message.filter { ReflectionUtils.canInject(it, *args2) }
+                    .apply { if (isNotEmpty()) handled = true }
+                    .forEach { runInWS(it, webSocket, *args2) }
+            }
+
+            if (!handled) {
+                log.warn("Unhandled message of type ${deserialized::class.simpleName} in bean ${bean::class.simpleName}")
+            }
         }
 
         override fun onUnavailable(webSocket: PerpetualWebSocket) {

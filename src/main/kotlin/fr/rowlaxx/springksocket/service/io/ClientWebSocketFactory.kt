@@ -72,7 +72,9 @@ class ClientWebSocketFactory(
                 onError = { closeWith(it) },
                 onTextMessage = { acceptMessage(it) },
                 onBinaryMessage = { acceptMessage(it) },
-                onDataReceived = { onDataReceived() }
+                onPing = { onDataReceived() },
+                onPong = { onDataReceived() },
+                onPartialData = { onDataReceived() }
             )
 
             val builder = client.newWebSocketBuilder()

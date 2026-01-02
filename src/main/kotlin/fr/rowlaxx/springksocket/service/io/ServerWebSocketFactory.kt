@@ -55,17 +55,9 @@ class ServerWebSocketFactory(
     ) {
 
         init {
-            session.setHandlePongMessage {
-                onDataReceived()
-            }
-            session.setHandleTextMessage {
-                onDataReceived()
-                acceptMessage(it)
-            }
-            session.setHandleBinaryMessage {
-                onDataReceived()
-                acceptMessage(it)
-            }
+            session.setHandlePongMessage { onDataReceived() }
+            session.setHandleTextMessage { acceptMessage(it) }
+            session.setHandleBinaryMessage { acceptMessage(it) }
             session.setHandleClose {
                 closeWith(WebSocketClosedException(it.reason ?: "Unknown reason", it.code))
             }
