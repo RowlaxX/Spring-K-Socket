@@ -1,6 +1,6 @@
 package fr.rowlaxx.springksocket.service.aop
 
-import fr.rowlaxx.springksocket.util.AutoPerpetualWebSocket
+import fr.rowlaxx.springksocket.core.AutoPerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import org.springframework.stereotype.Service
 import org.springframework.util.ReflectionUtils

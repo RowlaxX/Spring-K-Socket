@@ -1,4 +1,4 @@
-package fr.rowlaxx.springksocket.util
+package fr.rowlaxx.springksocket.core
 
 import fr.rowlaxx.springksocket.model.*
 
@@ -10,7 +10,7 @@ class WebSocketHandlerPerpetualProxy(
     private val perpetualWebSocket: PerpetualWebSocket,
     private val handler: PerpetualWebSocketHandler
 ) : WebSocketHandler {
-    override val deserializer: WebSocketDeserializer get() = handler.deserializer
+    override val deserializer: WebSocketDeserializer get() = WebSocketDeserializer.Passthrough // We let the PerpetualHandler handle deduplication
     override val serializer: WebSocketSerializer get() = handler.serializer
 
     override fun onAvailable(webSocket: WebSocket) {

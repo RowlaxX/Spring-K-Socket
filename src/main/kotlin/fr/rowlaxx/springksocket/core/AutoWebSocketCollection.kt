@@ -1,4 +1,4 @@
-package fr.rowlaxx.springksocket.util
+package fr.rowlaxx.springksocket.core
 
 import fr.rowlaxx.springksocket.model.WebSocket
 import java.util.*

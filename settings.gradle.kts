@@ -1,1 +1,1 @@
-rootProject.name = "SpringWebSocketAOP"
+rootProject.name = "Spring-K-Socket"

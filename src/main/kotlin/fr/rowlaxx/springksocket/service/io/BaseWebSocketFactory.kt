@@ -7,7 +7,15 @@ import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.exception.WebSocketInitializationException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import org.slf4j.LoggerFactory
+import fr.rowlaxx.springkutils.concurrent.core.SequentialWorker
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnCompleted
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnDone
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnError
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onCompleted
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onDone
+import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onError
+import fr.rowlaxx.springkutils.concurrent.utils.ExecutorsUtils
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import org.springframework.stereotype.Service
 import java.io.IOException
 import java.net.URI
@@ -15,18 +23,16 @@ import java.net.http.HttpHeaders
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 @Service
 class BaseWebSocketFactory {
-    private val log = LoggerFactory.getLogger(this.javaClass)
     private val idCounter = AtomicLong()
-    private val executor = Executors.newScheduledThreadPool(8) { Thread(it, "WebSocket") }
+    private val executor: ScheduledExecutorService = ExecutorsUtils.newFailsafeScheduledExecutor(8, "WebSocket")
+
 
     abstract class BaseWebSocket(
         private val factory: BaseWebSocketFactory,
@@ -39,67 +45,39 @@ class BaseWebSocketFactory {
         override val readTimeout: Duration,
         override val attributes: WebSocketAttributes = WebSocketAttributes()
     ) : WebSocket {
+        private val mainWorker = SequentialWorker(factory.executor)
+        private val sendWorker = SequentialWorker(factory.executor, enabled = false)
+
+        private var handlerIndex: Int = 0
+        private val lastInData = AtomicLong()
+        private var opened = false
+        private var closedWith: WebSocketException? = null
+
+        private var nextPing: Future<*>? = null
+        private var nextReadTimeout: Future<*>? = null
+        private var nextInitTimeout: Future<*>? = null
+
+
         override val id = factory.idCounter.andIncrement
-        private val lock = ReentrantLock()
-
-        private fun <T> safeAsync(action: () -> T) {
-            if (lock.isHeldByCurrentThread) {
-                action()
-            }
-            else {
-                factory.executor.submit<T> {
-                    lock.withLock(withLog(action))
-                }
-            }
-        }
-
-        private fun <T> safeAsyncDelayed(delay: Duration, action: () -> T): Future<T> {
-            return factory.executor.schedule<T>( {
-                lock.withLock(withLog(action))
-            }, delay.toMillis(), TimeUnit.MILLISECONDS)
-        }
-
-        private fun <T> withLog(action: () -> T): () -> T {
-            return {
-                try {
-                    action()
-                } catch (e: Throwable) {
-                    factory.log.error("[{} ({})] An internal error occurred and should be debugged", name, id, e)
-                    throw e
-                }
-            }
-        }
-
-        private inline fun callback(canChange: Boolean = false, action: () -> Unit) {
-            if (!canChange) {
-                canChangeState = false
-            }
-            runCatching { action() }
-                .onFailure { factory.log.error("[{} ({})] A callback error occurred", name, id, it) }
-            if (!canChange) {
-                canChangeState = true
-            }
-        }
+        override val currentHandlerIndex: Int get() = handlerIndex
 
         override fun hasOpened(): Boolean = opened
         override fun getClosedReason(): WebSocketException? = closedWith
-        override val currentHandlerIndex: Int get() = index
+
+        private fun <T> delayed(delay: Duration, action: () -> T): Future<T> {
+            return factory.executor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
+        }
+
+        private inline fun runHandler(handler: WebSocketHandler, action: WebSocketHandler.(WebSocket) -> Unit) {
+            runCatching { action(handler, this) }
+                .onFailure { factory.log.error("[{} ({})] A handler error occurred", name, id, it) }
+        }
 
         protected abstract fun pingNow(): CompletableFuture<*>
         protected abstract fun sendText(msg: String): CompletableFuture<*>
         protected abstract fun sendBinary(msg: ByteArray): CompletableFuture<*>
         protected abstract fun handleClose()
         protected abstract fun handleOpen(obj: Any)
-
-        private val sendingQueue = LinkedList<Pair<CompletableFuture<Unit>, () -> CompletableFuture<*>>>()
-        private val lastInData = AtomicLong()
-        private var nextPing: Future<*>? = null
-        private var sending = false
-        private var opened = false
-        private var canChangeState = true
-        private var nextReadTimeout: Future<*>? = null
-        private var nextInitTimeout: Future<*>? = null
-        private var index: Int = 0
 
         fun onDataReceived() {
             val last = lastInData.get()
@@ -108,50 +86,70 @@ class BaseWebSocketFactory {
 
             if (expired && lastInData.compareAndSet(last, now)) {
                 nextPing?.cancel(true)
-                nextPing = safeAsyncDelayed(pingAfter) {
-                    unsafeSendNow(CompletableFuture(), this::pingNow)
+                nextPing = delayed(pingAfter) {
+                    sendWorker.submitAsyncTask { pingNow() }
                 }
 
                 nextReadTimeout?.cancel(true)
-                nextReadTimeout = safeAsyncDelayed(readTimeout) {
-                    unsafeCloseWith(WebSocketConnectionException("Read timeout"))
+                nextReadTimeout = delayed(readTimeout) {
+                    closeWith(WebSocketConnectionException("Read timeout"))
                 }
             }
         }
 
-        private var closedWith: WebSocketException? = null
+
+
+
+        override fun closeAsync(reason: String, code: Int): CompletableFuture<Unit> {
+            return closeWith(WebSocketClosedException(reason, code)).onError {  }
+        }
+
+        override fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
+            return sendWorker.submitAsyncTask { threadSafeSendMessage(message) }
+                .onError { throw closedWith!! }
+        }
+
+        protected fun closeWith(reason: WebSocketException): CompletableFuture<Unit> {
+            return mainWorker.submitTask { threadSafeCloseWith(reason) }
+        }
 
         protected fun openWith(obj: Any) {
-            if (hasOpened() || hasClosed()) {
+            mainWorker.submitTask { threadSafeOpenWith(obj) }
+        }
+
+        protected fun acceptMessage(obj: Any) {
+            mainWorker.submitTask { threadSafeAcceptMessage(obj) }
+        }
+
+        override fun completeHandlerAsync(): CompletableFuture<Unit> {
+            return mainWorker.submitTask { threadSafeCompleteHandler() }
+                .onError { throw closedWith!! }
+        }
+
+
+
+
+        private fun threadSafeOpenWith(obj: Any) {
+            if (hasClosed() || hasOpened()) {
                 return
             }
 
-            safeAsync {
-                if (hasClosed() || hasOpened()) {
-                    return@safeAsync
-                }
+            opened = true
+            handleOpen(obj)
 
-                opened = true
-                callback { handleOpen(obj) }
-                factory.log.debug("[{} ({})] Opened", name, id)
-
-                if (!isInitialized()) {
-                    nextInitTimeout = safeAsyncDelayed(initTimeout) {
-                        unsafeCloseWith(WebSocketInitializationException("Initialization timeout"))
-                    }
-                }
-
-                onDataReceived() // Initialize ws timeout
-
-                sendingQueue.poll()?.let {
-                    unsafeSendNow(it.first, it.second)
-                }
-
-                callback(true) { currentHandler.onAvailable(this) }
+            if (!isInitialized()) {
+                nextInitTimeout = delayed(initTimeout) { mainWorker.submitTask {
+                    threadSafeCloseWith(WebSocketInitializationException("Initialization timeout"))
+                }}
             }
+
+            onDataReceived() // Initialize ws timeout
+            log.debug("[{} ({})] Opened", name, id)
+            sendWorker.enabled(true)
+            runHandler(currentHandler) { onAvailable(it) }
         }
 
-        private fun unsafeCloseWith(reason: WebSocketException) {
+        private fun threadSafeCloseWith(reason: WebSocketException) {
             if (hasClosed()) {
                 return
             }
@@ -161,146 +159,77 @@ class BaseWebSocketFactory {
             nextReadTimeout = null
             nextPing?.cancel(true)
             nextPing = null
-            callback { handleClose() }
-            factory.log.debug("[{} ({})] Closed : {}", name, id, reason.message)
-            callback { currentHandler.onUnavailable(this) }
+            mainWorker.retire()
+            sendWorker.retire()
+            handleClose()
+            log.debug("[{} ({})] Closed : {}", name, id, reason.message)
+            runHandler(currentHandler) { onUnavailable(it) }
         }
 
-        protected fun closeWith(reason: WebSocketException) {
-            if (hasClosed()) {
-                return
+        private fun threadSafeCompleteHandler() {
+            if (!isConnected()) {
+                throw IllegalStateException("WebSocket is not connected yet")
             }
 
-            safeAsync { unsafeCloseWith(reason) }
-        }
-
-        protected fun acceptMessage(obj: Any) {
-            if (hasClosed()) {
-                return
+            if (handlerIndex + 1 >= handlerChain.size) {
+                threadSafeCloseWith(WebSocketClosedException("End of HandlerChain", 1000))
             }
+            else {
+                val ch = currentHandler
+                handlerIndex += 1
+                val nh = currentHandler
 
-            onDataReceived()
-            safeAsync {
-                if (hasClosed()) {
-                    return@safeAsync
+                if (isInitialized()) {
+                    nextInitTimeout?.cancel(true)
+                    nextInitTimeout = null
                 }
-                callback(true) { currentHandler.onMessage(this, obj) }
+
+                if (ch !== nh) {
+                    runHandler(ch) { onUnavailable(it) }
+                    runHandler(nh) { onAvailable(it) }
+                }
             }
         }
 
-        override fun closeAsync(reason: String, code: Int): CompletableFuture<Unit> {
+        private fun threadSafeAcceptMessage(obj: Any) {
             if (hasClosed()) {
-                return CompletableFuture.completedFuture(Unit)
+                return
             }
 
-            val cf = CompletableFuture<Unit>()
-
-            safeAsync {
-                unsafeCloseWith(WebSocketClosedException(reason, code))
-                cf.complete(Unit)
-            }
-
-            return cf
+            val deserialized = currentHandler.deserializer.fromStringOrByteArray(obj)
+            runHandler(currentHandler) { onMessage(it, deserialized) }
         }
 
-        override fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
+        private fun threadSafeSendMessage(msg: Any): CompletableFuture<Unit> {
             if (hasClosed()) {
                 return CompletableFuture.failedFuture(closedWith!!)
             }
 
-            val cf = CompletableFuture<Unit>()
-
-            safeAsync {
-                val ser = when (message) {
-                    is String -> message
-                    is ByteArray -> message
-                    else -> runCatching { currentHandler.serializer.toStringOrByteArray(message) }
-                        .onFailure(cf::completeExceptionally)
-                        .getOrThrow()
-                }
-
-                when (ser) {
-                    is String -> unsafeSendNow(cf) { sendText(ser) }
-                    is ByteArray -> unsafeSendNow(cf) { sendBinary(ser) }
-                    else -> throw IllegalArgumentException("Message must be a String or a ByteArray after deserialization")
-                }
+            val ser = when (msg) {
+                is String -> msg
+                is ByteArray -> msg
+                else -> currentHandler.serializer.toStringOrByteArray(msg)
             }
 
-            return cf
-        }
-
-        private fun unsafeSendNow(result: CompletableFuture<Unit>, action: () -> CompletableFuture<*>) {
-            if (hasClosed()) {
-                result.completeExceptionally(closedWith)
-                sendingQueue.forEach {
-                    it.first.completeExceptionally(closedWith)
-                }
-                sendingQueue.clear()
+            val cf = when (ser) {
+                is String -> sendText(ser)
+                is ByteArray -> sendBinary(ser)
+                else -> throw IllegalStateException("Message must be a String or a ByteArray after serialization. Current type : ${msg.javaClass.simpleName}")
             }
-            else if (hasOpened() && !sending) {
-                sending = true
-                action().whenComplete { _, e -> safeAsync {
-                    sending = false
 
-                    if (e == null) {
-                        result.complete(Unit)
-                    }
-                    else {
-                        factory.log.error("[{} ({})] Unable to perform out operation", name, id)
+            return cf.composeOnError {
+                if (cf.isCancelled) {
+                    return@composeOnError CompletableFuture.failedFuture(it)
+                }
 
-                        val ex = e as? WebSocketException ?:
-                                (e as? IOException)?.let { WebSocketConnectionException("IOException : ${it.message}") } ?: WebSocketConnectionException(
-                            "Unknown exception : ${e.message}"
-                        )
+                val ex = when (it) {
+                    is WebSocketException -> it
+                    is IOException -> WebSocketConnectionException("IOException : ${it.message}")
+                    else -> WebSocketConnectionException("Unknown exception : ${it.message}")
+                }
 
-                        unsafeCloseWith(ex)
-                    }
-
-                    sendingQueue.poll()?.let { next ->
-                        unsafeSendNow(next.first, next.second)
-                    }
-                }}
+                return@composeOnError mainWorker.submitTask { threadSafeCloseWith(ex) }
             }
-            else {
-                sendingQueue.add(result to action)
-            }
-        }
-
-        override fun completeHandlerAsync(): CompletableFuture<Unit> {
-            val cf = CompletableFuture<Unit>()
-            safeAsync {
-                if (!canChangeState) {
-                    val ex = IllegalStateException("Cannot currently change state of websocket")
-                    cf.completeExceptionally(ex)
-                    throw ex
-                }
-                if (!hasOpened()) {
-                    throw IllegalStateException("Web Socket is still not opened")
-                }
-
-                if (index + 1 >= handlerChain.size) {
-                    unsafeCloseWith(WebSocketClosedException("End of HandlerChain", 1000))
-                    cf.complete(Unit)
-                }
-                else {
-                    val ch = currentHandler
-                    index += 1
-                    val nh = currentHandler
-
-                    if (isInitialized()) {
-                        nextInitTimeout?.cancel(true)
-                        nextInitTimeout = null
-                    }
-
-                    cf.complete(Unit)
-
-                    if (ch !== nh) {
-                        callback { ch.onUnavailable(this) }
-                        callback(true) { nh.onAvailable(this) }
-                    }
-                }
-            }
-            return cf
         }
     }
 }

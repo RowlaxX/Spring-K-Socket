@@ -1,4 +1,4 @@
-package fr.rowlaxx.springksocket.util
+package fr.rowlaxx.springksocket.core
 
 import java.util.*
 

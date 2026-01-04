@@ -1,6 +1,6 @@
-package fr.rowlaxx.springksocket.util
+package fr.rowlaxx.springksocket.core
 
-import java.util.*
+import java.util.LinkedList
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock

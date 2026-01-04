@@ -5,7 +5,7 @@ import fr.rowlaxx.springksocket.exception.WebSocketCreationException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import fr.rowlaxx.springksocket.util.JavaWebSocketListener
+import fr.rowlaxx.springksocket.core.JavaWebSocketListener
 import org.springframework.stereotype.Service
 import java.net.http.HttpClient
 import java.nio.ByteBuffer

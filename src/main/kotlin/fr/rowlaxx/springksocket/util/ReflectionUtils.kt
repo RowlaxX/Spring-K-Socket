@@ -7,32 +7,6 @@ import kotlin.reflect.KClass
 
 object ReflectionUtils {
 
-    fun <T : Annotation> findMethodsWithAnnotation(instance: Any, anno: KClass<T>): List<Pair<T, Method>> {
-        val result = mutableListOf<Pair<T, Method>>()
-        val type = AopUtils.getTargetClass(instance)
-
-        ReflectionUtils.doWithMethods(type) {
-            it.getAnnotation(anno.java)?.let { a ->
-                result.add(a to it)
-            }
-        }
-
-        return result
-    }
-
-    fun findMethodsWithReturnType(instance: Any, type: KClass<*>): List<Method> {
-        val result = mutableListOf<Method>()
-        val instanceType = AopUtils.getTargetClass(instance)
-
-        ReflectionUtils.doWithMethods(instanceType) {
-            if (it.returnType == type.java) {
-                result.add(it)
-            }
-        }
-
-        return result
-    }
-
     fun findInjectionScheme(instance: Any, method: Method, vararg params: KClass<*>): InjectionScheme {
         val convertAny = mutableSetOf<KClass<*>>()
         val paramOrder = method.parameterTypes
@@ -72,7 +46,7 @@ object ReflectionUtils {
         if (args.size != scheme.injectedTypes.size) {
             return false
         }
-        args.zip(scheme.injectedTypes).forEachIndexed { i, (instance, type) ->
+        args.zip(scheme.injectedTypes).forEach { (instance, type) ->
             if (instance != null && !type.isInstance(instance)) {
                 return false
             }

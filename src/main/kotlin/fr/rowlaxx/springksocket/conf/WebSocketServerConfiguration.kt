@@ -2,11 +2,12 @@ package fr.rowlaxx.springksocket.conf
 
 import fr.rowlaxx.springksocket.annotation.WebSocketServer
 import fr.rowlaxx.springksocket.data.WebSocketServerProperties
-import fr.rowlaxx.springksocket.util.SpringWebSocketHandler
+import fr.rowlaxx.springksocket.core.SpringWebSocketHandler
 import fr.rowlaxx.springksocket.service.aop.HandshakeInterceptorFactory
 import fr.rowlaxx.springksocket.service.aop.WebSocketHandlerFactory
 import fr.rowlaxx.springksocket.service.aop.WebSocketSerializerDeserializerExtractor
 import fr.rowlaxx.springksocket.service.io.ServerWebSocketFactory
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import org.springframework.aop.support.AopUtils
 import org.springframework.beans.factory.getBeansWithAnnotation
 import org.springframework.context.ApplicationContext
@@ -64,6 +65,11 @@ class WebSocketServerConfiguration(
                 .apply { if (anno.withSockJS) withSockJS() }
                 .apply { if (anno.allowedOriginPatterns.isNotEmpty()) setAllowedOriginPatterns(*anno.allowedOriginPatterns) }
                 .apply { addInterceptors(handshakeInterceptor) }
+        }
+
+
+        if (beans.isNotEmpty()) {
+            log.info("Found ${beans.size} WebSocket server(s)")
         }
     }
 

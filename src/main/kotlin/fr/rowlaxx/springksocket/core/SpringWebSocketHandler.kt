@@ -1,4 +1,4 @@
-package fr.rowlaxx.springksocket.util
+package fr.rowlaxx.springksocket.core
 
 import fr.rowlaxx.springksocket.data.WebSocketServerProperties
 import fr.rowlaxx.springksocket.service.io.ServerWebSocketFactory

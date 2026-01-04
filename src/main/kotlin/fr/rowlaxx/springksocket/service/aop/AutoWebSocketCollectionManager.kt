@@ -1,7 +1,7 @@
 package fr.rowlaxx.springksocket.service.aop
 
 import fr.rowlaxx.springksocket.model.WebSocket
-import fr.rowlaxx.springksocket.util.AutoWebSocketCollection
+import fr.rowlaxx.springksocket.core.AutoWebSocketCollection
 import org.springframework.stereotype.Service
 import org.springframework.util.ReflectionUtils
 import java.lang.reflect.Modifier

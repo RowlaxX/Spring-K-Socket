@@ -6,9 +6,8 @@ import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springksocket.service.io.ClientWebSocketFactory
-import fr.rowlaxx.springksocket.util.MessageDeduplicator
-import fr.rowlaxx.springksocket.util.MessageSender
-import fr.rowlaxx.springksocket.util.WebSocketHandlerPerpetualProxy
+import fr.rowlaxx.springksocket.core.MessageDeduplicator
+import fr.rowlaxx.springksocket.core.WebSocketHandlerPerpetualProxy
 import org.springframework.stereotype.Service
 import java.time.Duration
 import java.util.*

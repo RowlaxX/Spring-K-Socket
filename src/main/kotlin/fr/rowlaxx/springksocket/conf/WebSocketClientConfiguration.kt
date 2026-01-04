@@ -7,6 +7,7 @@ import fr.rowlaxx.springksocket.service.aop.WebSocketHandlerFactory
 import fr.rowlaxx.springksocket.service.aop.WebSocketSerializerDeserializerExtractor
 import fr.rowlaxx.springksocket.service.aop.AutoPerpetualWebSocketManager
 import fr.rowlaxx.springksocket.service.perp.PerpetualWebSocketFactory
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import jakarta.annotation.PostConstruct
 import org.springframework.aop.support.AopUtils
 import org.springframework.beans.factory.getBeansWithAnnotation
@@ -56,6 +57,10 @@ class WebSocketClientConfiguration(
             )
 
             perpetualManager.set(bean, perpWS)
+        }
+
+        if (beans.isNotEmpty()) {
+            log.info("Found ${beans.size} WebSocket client(s)")
         }
     }
 
