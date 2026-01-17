@@ -1,5 +1,6 @@
 package fr.rowlaxx.springksocket.core
 
+import fr.rowlaxx.springksocket.data.WebSocketAttributes
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue

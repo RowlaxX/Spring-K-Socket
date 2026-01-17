@@ -131,6 +131,7 @@ class PerpetualWebSocketFactory(
                 }
                 if (connections.isEmpty()) {
                     sendWorker.enabled(false)
+                    handler.onUnavailable(this)
                 }
             }
         }
@@ -139,7 +140,6 @@ class PerpetualWebSocketFactory(
             mainWorker.submitTask {
                 if (totalConnections() <= 1 || (totalConnections() > 1 && deduplicator.accept(msg, webSocket.id))) {
                     val deserialized = handler.deserializer.fromStringOrByteArray(msg)
-
                     handler.onMessage(this, deserialized)
                 }
             }

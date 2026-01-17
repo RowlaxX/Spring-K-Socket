@@ -9,9 +9,4 @@ import org.springframework.context.annotation.Configuration
 @ComponentScan(basePackageClasses = [SpringKSocketConfiguration::class])
 class SpringKSocketConfiguration {
 
-    @PostConstruct
-    fun postConstruct() {
-        log.info("Initialized")
-    }
-
 }
