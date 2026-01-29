@@ -2,9 +2,8 @@ package fr.rowlaxx.springksocket.model
 
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
 
-interface PerpetualWebSocket {
+interface PerpetualWebSocket : WebSocketMessageSender {
 
     val id: Int
     val name: String
@@ -15,6 +14,5 @@ interface PerpetualWebSocket {
     val propertiesFactory: () -> WebSocketClientProperties
 
     fun isConnected(): Boolean
-    fun sendMessageAsync(message: Any): CompletableFuture<Unit>
 
 }

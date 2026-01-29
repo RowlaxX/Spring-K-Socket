@@ -7,7 +7,7 @@ import java.net.http.HttpHeaders
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 
-interface WebSocket {
+interface WebSocket : WebSocketMessageSender {
 
     val id: Long
     val name: String
@@ -25,7 +25,6 @@ interface WebSocket {
     val requestHeaders: HttpHeaders
 
     fun completeHandlerAsync(): CompletableFuture<Unit>
-    fun sendMessageAsync(message: Any): CompletableFuture<Unit>
     fun closeAsync(reason: String="Normal close", code: Int=1000): CompletableFuture<Unit>
 
     fun hasClosed(): Boolean = getClosedReason() != null

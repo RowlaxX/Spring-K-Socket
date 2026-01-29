@@ -1,13 +1,11 @@
 package fr.rowlaxx.springksocket.core
 
-import fr.rowlaxx.springksocket.data.WebSocketAttributes
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
+import fr.rowlaxx.springksocket.model.WebSocketMessageSender
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
-class AutoPerpetualWebSocket {
+class AutoPerpetualWebSocket : WebSocketMessageSender {
     private var perp: PerpetualWebSocket? = null
     private val pending = ConcurrentLinkedQueue<Pair<Any, CompletableFuture<Unit>>>()
 
@@ -30,7 +28,7 @@ class AutoPerpetualWebSocket {
         sendIfPossible()
     }
 
-    fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
+    override fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
         if (perp != null) {
             return perp!!.sendMessageAsync(message)
         }
