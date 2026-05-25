@@ -3,7 +3,6 @@ package fr.rowlaxx.springksocket.service.aop
 import fr.rowlaxx.springksocket.annotation.OnAvailable
 import fr.rowlaxx.springksocket.annotation.OnMessage
 import fr.rowlaxx.springksocket.annotation.OnUnavailable
-import fr.rowlaxx.springksocket.data.WebSocketAttributes
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketHandler
@@ -14,7 +13,6 @@ import fr.rowlaxx.springkutils.reflection.utils.InjectionUtils.canInvoke
 import fr.rowlaxx.springkutils.reflection.utils.InjectionUtils.invoke
 import fr.rowlaxx.springkutils.reflection.utils.InjectionUtils.toInjectionSupport
 import fr.rowlaxx.springkutils.reflection.utils.ReflectionUtils
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
 @Service
@@ -68,6 +66,10 @@ class WebSocketHandlerFactory(
         }
 
         override fun onMessage(webSocket: WebSocket, msg: Any) {
+            if (msg == Unit) {
+                return
+            }
+
             val args = arrayOf(webSocket, webSocket.attributes, msg)
 
             message.filter { it.canInvoke(*args) }

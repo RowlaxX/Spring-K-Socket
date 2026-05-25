@@ -60,6 +60,10 @@ class PerpetualWebSocketHandlerFactory() {
         }
 
         override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {
+            if (msg == Unit) {
+                return
+            }
+
             val args1 = arrayOf(webSocket, msg)
 
             message.filter { it.canInvoke(*args1) }
