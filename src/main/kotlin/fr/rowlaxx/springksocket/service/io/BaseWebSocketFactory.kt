@@ -9,23 +9,16 @@ import fr.rowlaxx.springksocket.exception.WebSocketInitializationException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springkutils.concurrent.core.SequentialWorker
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnCompleted
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnDone
 import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnError
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onCompleted
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onDone
 import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onError
-import fr.rowlaxx.springkutils.concurrent.utils.ExecutorsUtils
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import org.springframework.stereotype.Service
 import java.io.IOException
 import java.net.URI
 import java.net.http.HttpHeaders
 import java.time.Duration
-import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Future
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -89,7 +82,7 @@ class BaseWebSocketFactory(
         fun onDataReceived() {
             val last = lastInData.get()
             val now = System.currentTimeMillis()
-            val expired = last + 50 < now //Improve efficiency on large traffic websocket
+            val expired = last + 100 < now //Improve efficiency on large traffic websocket
 
             if (expired && lastInData.compareAndSet(last, now)) {
                 nextPing?.cancel(true)

@@ -1,11 +1,11 @@
 package fr.rowlaxx.springksocket.service.io
 
+import fr.rowlaxx.springksocket.core.JavaWebSocketListener
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
 import fr.rowlaxx.springksocket.exception.WebSocketCreationException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import fr.rowlaxx.springksocket.core.JavaWebSocketListener
 import org.springframework.stereotype.Service
 import java.net.http.HttpClient
 import java.nio.ByteBuffer
@@ -72,9 +72,7 @@ class ClientWebSocketFactory(
                 onError = { closeWith(it) },
                 onTextMessage = { acceptMessage(it) },
                 onBinaryMessage = { acceptMessage(it) },
-                onPing = { onDataReceived() },
-                onPong = { onDataReceived() },
-                onPartialData = { onDataReceived() }
+                onInData = { onDataReceived() },
             )
 
             val builder = client.newWebSocketBuilder()

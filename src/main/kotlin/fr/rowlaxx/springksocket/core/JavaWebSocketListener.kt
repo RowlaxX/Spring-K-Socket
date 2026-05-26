@@ -14,9 +14,7 @@ class JavaWebSocketListener(
     private val onTextMessage: (String) -> Unit,
     private val onBinaryMessage: (ByteArray) -> Unit,
     private val onError: (WebSocketException) -> Unit,
-    private val onPing: () -> Unit,
-    private val onPong: () -> Unit,
-    private val onPartialData: () -> Unit,
+    private val onInData: () -> Unit,
 ) : WebSocket.Listener {
     private var currentMessage: StringBuilder = StringBuilder()
     private var currentBinary: ByteArrayBuilder = ByteArrayBuilder()
@@ -40,16 +38,18 @@ class JavaWebSocketListener(
     }
 
     override fun onPing(webSocket: WebSocket?, message: ByteBuffer?): CompletionStage<*>? {
-        onPing()
+        onInData()
         return super.onPing(webSocket, message)
     }
 
     override fun onPong(webSocket: WebSocket?, message: ByteBuffer?): CompletionStage<*>? {
-        onPong()
+        onInData()
         return super.onPong(webSocket, message)
     }
 
     override fun onBinary(webSocket: WebSocket, data: ByteBuffer, last: Boolean): CompletionStage<*>? {
+        onInData()
+
         if (currentBinary.size() == 0 && last) {
             onBinaryMessage(data.getBackingArray())
         }
@@ -61,9 +61,6 @@ class JavaWebSocketListener(
                 currentBinary = ByteArrayBuilder()
                 onBinaryMessage(result)
             }
-            else {
-                onPartialData()
-            }
         }
 
         return super.onBinary(webSocket, data, last)
@@ -71,6 +68,8 @@ class JavaWebSocketListener(
 
 
     override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*>? {
+        onInData()
+
         if (currentMessage.isEmpty() && last) {
             onTextMessage(data.toString())
         }
@@ -81,9 +80,6 @@ class JavaWebSocketListener(
                 val result = currentMessage.toString()
                 currentMessage = StringBuilder()
                 onTextMessage(result)
-            }
-            else {
-                onPartialData()
             }
         }
 
