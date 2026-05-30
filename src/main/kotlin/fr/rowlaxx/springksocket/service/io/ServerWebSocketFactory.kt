@@ -10,27 +10,23 @@ import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleClose
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandlePongMessage
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleTextMessage
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleTransportError
+import kotlinx.coroutines.Job
 import org.springframework.stereotype.Service
 import org.springframework.web.socket.BinaryMessage
 import org.springframework.web.socket.PingMessage
 import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketSession
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
 
 @Service
 class ServerWebSocketFactory(
     private val baseFactory: BaseWebSocketFactory,
 ) {
-    private val sender = Executors.newScheduledThreadPool(2) { Thread(it, "WebSocket Sender") }
 
     fun wrap(
         session: WebSocketSession,
         config: WebSocketServerProperties,
     ): WebSocket {
         return InternalImplementation(
-            sender = sender,
             session = session,
             config = config,
             factory = baseFactory,
@@ -38,7 +34,6 @@ class ServerWebSocketFactory(
     }
 
     private class InternalImplementation(
-        private val sender: Executor,
         private val session: WebSocketSession,
         factory: BaseWebSocketFactory,
         config: WebSocketServerProperties,
@@ -68,31 +63,19 @@ class ServerWebSocketFactory(
             openWith(session)
         }
 
-        private fun send(task: () -> Unit): CompletableFuture<Unit> {
-            val cf = CompletableFuture<Unit>()
-
-            sender.execute {
-                try {
-                    task()
-                    cf.complete(Unit)
-                } catch (e: Exception) {
-                    cf.completeExceptionally(e)
-                }
-            }
-
-            return cf
+        override fun pingNow(): Job {
+            session.sendMessage(PingMessage())
+            return Job().also { it.complete() }
         }
 
-        override fun pingNow(): CompletableFuture<*> {
-            return send { session.sendMessage(PingMessage()) }
+        override fun sendText(msg: String): Job {
+            session.sendMessage(TextMessage(msg))
+            return Job().also { it.complete() }
         }
 
-        override fun sendText(msg: String): CompletableFuture<*> {
-            return send { session.sendMessage(TextMessage(msg)) }
-        }
-
-        override fun sendBinary(msg: ByteArray): CompletableFuture<*> {
-            return send { session.sendMessage(BinaryMessage(msg)) }
+        override fun sendBinary(msg: ByteArray): Job {
+            session.sendMessage(BinaryMessage(msg))
+            return Job().also { it.complete() }
         }
 
         override fun handleClose() {}

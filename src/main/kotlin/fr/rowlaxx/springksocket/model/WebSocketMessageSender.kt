@@ -1,9 +1,9 @@
 package fr.rowlaxx.springksocket.model
 
-import java.util.concurrent.CompletableFuture
+import kotlinx.coroutines.Job
 
 interface WebSocketMessageSender {
 
-    fun sendMessageAsync(message: Any): CompletableFuture<Unit>
+    fun sendMessageAsync(message: Any): Job
 
 }

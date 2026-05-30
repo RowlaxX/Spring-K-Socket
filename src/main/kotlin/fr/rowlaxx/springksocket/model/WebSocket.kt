@@ -2,10 +2,10 @@ package fr.rowlaxx.springksocket.model
 
 import fr.rowlaxx.springksocket.data.WebSocketAttributes
 import fr.rowlaxx.springksocket.exception.WebSocketException
+import kotlinx.coroutines.Job
 import java.net.URI
 import java.net.http.HttpHeaders
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
 
 interface WebSocket : WebSocketMessageSender {
 
@@ -24,8 +24,8 @@ interface WebSocket : WebSocketMessageSender {
 
     val requestHeaders: HttpHeaders
 
-    fun completeHandlerAsync(): CompletableFuture<Unit>
-    fun closeAsync(reason: String="Normal close", code: Int=1000): CompletableFuture<Unit>
+    fun completeHandlerAsync(): Job
+    fun closeAsync(reason: String="Normal close", code: Int=1000): Job
 
     fun hasClosed(): Boolean = getClosedReason() != null
     fun getClosedReason(): WebSocketException?

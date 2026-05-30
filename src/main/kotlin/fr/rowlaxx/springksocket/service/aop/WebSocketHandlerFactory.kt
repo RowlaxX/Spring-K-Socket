@@ -92,9 +92,7 @@ class WebSocketHandlerFactory(
                 .onFailure { log.error("Method ${scheme.method} threw an exception", it) }
                 .onSuccess {
                     if (it != null && it != Unit) {
-                        ws.sendMessageAsync(it).exceptionally { e ->
-                            log.error("Unable to send returned object of type ${it::class.simpleName} : ${e.message}")
-                        }
+                        ws.sendMessageAsync(it)
                     }
                 }
         }

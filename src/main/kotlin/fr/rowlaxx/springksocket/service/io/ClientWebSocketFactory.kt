@@ -6,20 +6,22 @@ import fr.rowlaxx.springksocket.exception.WebSocketCreationException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
+import fr.rowlaxx.springkutils.concurrent.config.ThreadConfiguration
+import fr.rowlaxx.springkutils.io.service.HttpClientService
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.future.asDeferred
 import org.springframework.stereotype.Service
 import java.net.http.HttpClient
 import java.nio.ByteBuffer
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @Service
 class ClientWebSocketFactory(
-    private val baseFactory: BaseWebSocketFactory
+    private val baseFactory: BaseWebSocketFactory,
+    private val threads: ThreadConfiguration,
+    private val httpClient: HttpClientService
 ) {
-    private val httpClient = HttpClient.newHttpClient()
-    private val scheduler = Executors.newSingleThreadScheduledExecutor { Thread(it, "WebSocket Connector") }
 
     fun connectFailsafe(
         name: String,
@@ -27,7 +29,7 @@ class ClientWebSocketFactory(
         handlerChain: List<WebSocketHandler>,
     ) {
         connect(name, properties, handlerChain) {
-            scheduler.schedule({
+            threads.taskScheduler.scheduledExecutor.schedule({
                 connectFailsafe(name, properties, handlerChain)
             }, 2000, TimeUnit.MILLISECONDS)
         }
@@ -45,7 +47,7 @@ class ClientWebSocketFactory(
             handlerChain = handlerChain,
             name = name,
             onInitializationError = onInitializationError
-        ).apply { connect(httpClient, properties.connectTimeout) }
+        ).apply { connect(httpClient.client, properties.connectTimeout) }
     }
 
     private class InternalImplementation(
@@ -89,16 +91,16 @@ class ClientWebSocketFactory(
                 }
         }
 
-        override fun pingNow(): CompletableFuture<*> {
-            return javaWS!!.sendPing(ByteBuffer.allocate(0))
+        override fun pingNow(): Job {
+            return javaWS!!.sendPing(ByteBuffer.allocate(0)).asDeferred()
         }
 
-        override fun sendText(msg: String): CompletableFuture<*> {
-            return javaWS!!.sendText(msg, true)
+        override fun sendText(msg: String): Job {
+            return javaWS!!.sendText(msg, true).asDeferred()
         }
 
-        override fun sendBinary(msg: ByteArray): CompletableFuture<*> {
-            return javaWS!!.sendBinary(ByteBuffer.wrap(msg), true)
+        override fun sendBinary(msg: ByteArray): Job {
+            return javaWS!!.sendBinary(ByteBuffer.wrap(msg), true).asDeferred()
         }
 
         override fun handleClose() {

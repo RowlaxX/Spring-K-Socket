@@ -1,9 +1,9 @@
 package fr.rowlaxx.springksocket.core
 
 import fr.rowlaxx.springksocket.model.WebSocket
+import kotlinx.coroutines.future.asCompletableFuture
 import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.atomic.AtomicInteger
 
 class AutoWebSocketCollection {
     private val webSockets = LinkedList<WebSocket>()
@@ -34,20 +34,9 @@ class AutoWebSocketCollection {
             .toSet()
             .associateWith { it.toStringOrByteArray(msg) }
 
-        val cf = CompletableFuture<Unit>()
-        val count = AtomicInteger()
+        val cfs = wss.map { it.sendMessageAsync(serMessages[it.currentHandler.serializer]!!).asCompletableFuture() }
 
-        wss.forEach {
-            val serMessage = serMessages[it.currentHandler.serializer]!!
-
-            it.sendMessageAsync(serMessage).whenComplete { _, _ ->
-                if (count.incrementAndGet() == wss.size) {
-                    cf.complete(Unit)
-                }
-            }
-        }
-
-        return cf
+        return CompletableFuture.allOf(*cfs.toTypedArray()).thenApply { }
     }
 
     fun sendAll(msg: Any) = send(msg) { true }

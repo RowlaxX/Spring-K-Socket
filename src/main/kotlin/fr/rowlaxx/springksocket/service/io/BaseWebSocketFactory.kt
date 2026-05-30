@@ -1,6 +1,5 @@
 package fr.rowlaxx.springksocket.service.io
 
-import fr.rowlaxx.springksocket.conf.WebSocketConfiguration
 import fr.rowlaxx.springksocket.data.WebSocketAttributes
 import fr.rowlaxx.springksocket.exception.WebSocketClosedException
 import fr.rowlaxx.springksocket.exception.WebSocketConnectionException
@@ -8,23 +7,22 @@ import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.exception.WebSocketInitializationException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import fr.rowlaxx.springkutils.concurrent.core.SequentialWorker
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.composeOnError
-import fr.rowlaxx.springkutils.concurrent.utils.CompletableFutureExtension.onError
+import fr.rowlaxx.springkutils.concurrent.config.ThreadConfiguration
+import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
+import kotlinx.coroutines.Job
 import org.springframework.stereotype.Service
 import java.io.IOException
 import java.net.URI
 import java.net.http.HttpHeaders
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 @Service
 class BaseWebSocketFactory(
-    private val config: WebSocketConfiguration
+    private val threads: ThreadConfiguration
 ) {
     private val idCounter = AtomicLong()
 
@@ -39,8 +37,8 @@ class BaseWebSocketFactory(
         override val readTimeout: Duration,
         override val attributes: WebSocketAttributes = WebSocketAttributes()
     ) : WebSocket {
-        private val mainWorker = SequentialWorker(factory.config.executor)
-        private val sendWorker = SequentialWorker(factory.config.executor, enabled = false)
+        private val mainQueue = TaskQueue(factory.threads.ioDispatcher)
+        private val sendQueue = TaskQueue(factory.threads.ioDispatcher, paused = true)
 
         private var handlerIndex: Int = 0
         private val lastInData = AtomicLong()
@@ -65,7 +63,7 @@ class BaseWebSocketFactory(
         override fun getClosedReason(): WebSocketException? = closedWith
 
         private fun <T> delayed(delay: Duration, action: () -> T): Future<T> {
-            return factory.config.executor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
+            return factory.threads.taskScheduler.scheduledExecutor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
         }
 
         private inline fun runHandler(handler: WebSocketHandler, action: WebSocketHandler.(WebSocket) -> Unit) {
@@ -73,9 +71,9 @@ class BaseWebSocketFactory(
                 .onFailure { factory.log.error("[{} ({})] A handler error occurred", name, id, it) }
         }
 
-        protected abstract fun pingNow(): CompletableFuture<*>
-        protected abstract fun sendText(msg: String): CompletableFuture<*>
-        protected abstract fun sendBinary(msg: ByteArray): CompletableFuture<*>
+        protected abstract fun pingNow(): Job
+        protected abstract fun sendText(msg: String): Job
+        protected abstract fun sendBinary(msg: ByteArray): Job
         protected abstract fun handleClose()
         protected abstract fun handleOpen(obj: Any)
 
@@ -87,7 +85,7 @@ class BaseWebSocketFactory(
             if (expired && lastInData.compareAndSet(last, now)) {
                 nextPing?.cancel(true)
                 nextPing = delayed(pingAfter) {
-                    sendWorker.submitAsyncTask { pingNow() }
+                    sendQueue.submit { pingNow().join() }
                 }
 
                 nextReadTimeout?.cancel(true)
@@ -100,36 +98,34 @@ class BaseWebSocketFactory(
 
 
 
-        override fun closeAsync(reason: String, code: Int): CompletableFuture<Unit> {
-            return closeWith(WebSocketClosedException(reason, code)).onError {  }
+        override fun closeAsync(reason: String, code: Int): Job {
+            return closeWith(WebSocketClosedException(reason, code))
         }
 
-        override fun sendMessageAsync(message: Any): CompletableFuture<Unit> {
-            return sendWorker.submitAsyncTask { threadSafeSendMessage(message) }
-                .onError { throw closedWith!! }
+        override fun sendMessageAsync(message: Any): Job {
+            return sendQueue.submit { unsafeSendMessage(message) }
         }
 
-        protected fun closeWith(reason: WebSocketException): CompletableFuture<Unit> {
-            return mainWorker.submitTask { threadSafeCloseWith(reason) }
+        protected fun closeWith(reason: WebSocketException): Job {
+            return mainQueue.submit { unsafeCloseWith(reason) }
         }
 
         protected fun openWith(obj: Any) {
-            mainWorker.submitTask { threadSafeOpenWith(obj) }
+            mainQueue.submit { unsafeOpenWith(obj) }
         }
 
         protected fun acceptMessage(obj: Any) {
-            mainWorker.submitTask { threadSafeAcceptMessage(obj) }
+            mainQueue.submit { unsafeAcceptMessage(obj) }
         }
 
-        override fun completeHandlerAsync(): CompletableFuture<Unit> {
-            return mainWorker.submitTask { threadSafeCompleteHandler() }
-                .onError { throw closedWith!! }
+        override fun completeHandlerAsync(): Job {
+            return mainQueue.submit { unsafeCompleteHandler() }
         }
 
 
 
 
-        private fun threadSafeOpenWith(obj: Any) {
+        private fun unsafeOpenWith(obj: Any) {
             if (hasClosed() || hasOpened()) {
                 return
             }
@@ -138,18 +134,18 @@ class BaseWebSocketFactory(
             handleOpen(obj)
 
             if (!isInitialized()) {
-                nextInitTimeout = delayed(initTimeout) { mainWorker.submitTask {
-                    threadSafeCloseWith(WebSocketInitializationException("Initialization timeout"))
-                }}
+                nextInitTimeout = delayed(initTimeout) {
+                    closeWith(WebSocketInitializationException("Initialization timeout"))
+                }
             }
 
-            onDataReceived() // Initialize ws timeout
+            onDataReceived()
             log.debug("[{} ({})] Opened", name, id)
-            sendWorker.enabled(true)
+            sendQueue.resume()
             runHandler(currentHandler) { onAvailable(it) }
         }
 
-        private fun threadSafeCloseWith(reason: WebSocketException) {
+        private fun unsafeCloseWith(reason: WebSocketException) {
             if (hasClosed()) {
                 return
             }
@@ -159,20 +155,20 @@ class BaseWebSocketFactory(
             nextReadTimeout = null
             nextPing?.cancel(true)
             nextPing = null
-            mainWorker.retire()
-            sendWorker.retire()
+            mainQueue.close()
+            sendQueue.close()
             handleClose()
             log.debug("[{} ({})] Closed : {}", name, id, reason.message)
             runHandler(currentHandler) { onUnavailable(it) }
         }
 
-        private fun threadSafeCompleteHandler() {
+        private fun unsafeCompleteHandler() {
             if (!isConnected()) {
                 throw IllegalStateException("WebSocket is not connected yet")
             }
 
             if (handlerIndex + 1 >= handlerChain.size) {
-                threadSafeCloseWith(WebSocketClosedException("End of HandlerChain", 1000))
+                unsafeCloseWith(WebSocketClosedException("End of HandlerChain", 1000))
             }
             else {
                 val ch = currentHandler
@@ -191,7 +187,7 @@ class BaseWebSocketFactory(
             }
         }
 
-        private fun threadSafeAcceptMessage(obj: Any) {
+        private fun unsafeAcceptMessage(obj: Any) {
             if (hasClosed()) {
                 return
             }
@@ -200,9 +196,9 @@ class BaseWebSocketFactory(
             runHandler(currentHandler) { onMessage(it, deserialized) }
         }
 
-        private fun threadSafeSendMessage(msg: Any): CompletableFuture<Unit> {
+        private suspend fun unsafeSendMessage(msg: Any) {
             if (hasClosed()) {
-                return CompletableFuture.failedFuture(closedWith!!)
+                return
             }
 
             val ser = when (msg) {
@@ -211,24 +207,22 @@ class BaseWebSocketFactory(
                 else -> currentHandler.serializer.toStringOrByteArray(msg)
             }
 
-            val cf = when (ser) {
+            val job = when (ser) {
                 is String -> sendText(ser)
                 is ByteArray -> sendBinary(ser)
                 else -> throw IllegalStateException("Message must be a String or a ByteArray after serialization. Current type : ${msg.javaClass.simpleName}")
             }
 
-            return cf.composeOnError {
-                if (cf.isCancelled) {
-                    return@composeOnError CompletableFuture.failedFuture(it)
+            try {
+                job.join()
+            } catch (e: Exception) {
+                val ex = when (e) {
+                    is WebSocketException -> e
+                    is IOException -> WebSocketConnectionException("IOException : ${e.message}")
+                    else -> WebSocketConnectionException("Unknown exception : ${e.message}")
                 }
 
-                val ex = when (it) {
-                    is WebSocketException -> it
-                    is IOException -> WebSocketConnectionException("IOException : ${it.message}")
-                    else -> WebSocketConnectionException("Unknown exception : ${it.message}")
-                }
-
-                return@composeOnError mainWorker.submitTask { threadSafeCloseWith(ex) }
+                mainQueue.submit { unsafeCloseWith(ex) }
             }
         }
     }
