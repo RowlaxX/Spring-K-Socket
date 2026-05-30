@@ -7,7 +7,7 @@ import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.exception.WebSocketInitializationException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import fr.rowlaxx.springkutils.concurrent.config.ThreadConfiguration
+import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.Job
@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 @Service
 class BaseWebSocketFactory(
-    private val threads: ThreadConfiguration
+    private val threads: GlobalExecutorsConfiguration
 ) {
     private val idCounter = AtomicLong()
 
