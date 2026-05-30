@@ -17,12 +17,12 @@ class AutoPerpetualWebSocketManager {
         val result = mutableListOf<Field>()
 
         ReflectionUtils.findFieldsWithType(bean, PerpetualWebSocket::class.java).onEach {
-            if (Modifier.isFinal(it.modifiers)) {
+            if (!Modifier.isFinal(it.modifiers)) {
                 it.isAccessible = true
                 result.add(it)
             }
             else {
-                throw IllegalArgumentException("Please make field '${it.name}' in class ${bean.javaClass.simpleName} immutable")
+                throw IllegalArgumentException("Please make field '${it.name}' in class ${bean.javaClass.simpleName} mutable")
             }
         }
 
