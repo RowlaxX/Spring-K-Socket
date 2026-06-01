@@ -10,12 +10,16 @@ import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
+import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.runBlocking
 import org.springframework.stereotype.Service
 import java.io.IOException
 import java.net.URI
 import java.net.http.HttpHeaders
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -25,6 +29,18 @@ class BaseWebSocketFactory(
     private val threads: GlobalExecutorsConfiguration
 ) {
     private val idCounter = AtomicLong()
+    private val sockets = ConcurrentHashMap<Long, BaseWebSocket>()
+
+    @PreDestroy
+    fun destroy() {
+        runBlocking {
+            while (sockets.isNotEmpty()) {
+                sockets.values.toList()
+                    .map { it.closeAsync("Application closed") }
+                    .joinAll()
+            }
+        }
+    }
 
     abstract class BaseWebSocket(
         private val factory: BaseWebSocketFactory,
@@ -57,6 +73,7 @@ class BaseWebSocketFactory(
             if (pingAfter.isNegative) throw IllegalArgumentException("pingAfter must be a positive integer")
             if (readTimeout.isNegative) throw IllegalArgumentException("readTimeout must be a positive integer")
             if (initTimeout.isNegative) throw IllegalArgumentException("initTimeout must be a positive integer")
+            factory.sockets[id] = this
         }
 
         override fun hasOpened(): Boolean = opened
@@ -157,6 +174,7 @@ class BaseWebSocketFactory(
             nextPing = null
             mainQueue.close()
             sendQueue.close()
+            factory.sockets.remove(id)
             handleClose()
             log.debug("[{} ({})] Closed : {}", name, id, reason.message)
             runHandler(currentHandler) { onUnavailable(it) }

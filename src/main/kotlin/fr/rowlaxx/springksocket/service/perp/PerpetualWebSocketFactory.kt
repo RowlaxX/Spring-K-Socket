@@ -17,6 +17,7 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 @Service
@@ -25,6 +26,7 @@ class PerpetualWebSocketFactory(
     private val threads: GlobalExecutorsConfiguration,
 ) {
     private val idCounter = AtomicInteger()
+    private val destroyed = AtomicBoolean()
 
     fun create(
         name: String,
@@ -81,6 +83,10 @@ class PerpetualWebSocketFactory(
         private val handlerChain = initializers.plus(handlerProxy)
 
         fun reconnectSafe() {
+            if (destroyed.get()) {
+                return
+            }
+
             mainQueue.submit {
                 if (connecting) {
                     return@submit
@@ -101,15 +107,21 @@ class PerpetualWebSocketFactory(
             return threads.taskScheduler.scheduledExecutor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
         }
 
-        private fun acceptOpeningConnection(webSocket: WebSocket) = mainQueue.submit {
-            connecting = false
-            connections.add(webSocket)
-            nextReconnection = delayed(shiftDuration, this::reconnectSafe)
-            delayed(switchDuration, this::closeOldConnections)
+        private fun acceptOpeningConnection(webSocket: WebSocket) {
+            if (destroyed.get()) {
+                return
+            }
 
-            if (connections.size == 1) {
-                sendQueue.resume()
-                handler.onAvailable(this)
+            mainQueue.submit {
+                connecting = false
+                connections.add(webSocket)
+                nextReconnection = delayed(shiftDuration, this::reconnectSafe)
+                delayed(switchDuration, this::closeOldConnections)
+
+                if (connections.size == 1) {
+                    sendQueue.resume()
+                    handler.onAvailable(this)
+                }
             }
         }
 
@@ -119,20 +131,26 @@ class PerpetualWebSocketFactory(
                 .forEach { it.closeAsync("Shift ended", 1000) }
         }
 
-        private fun acceptClosingConnection(webSocket: WebSocket) = mainQueue.submit {
-            val isLast = connections.lastOrNull()?.id == webSocket.id
-            val removed = connections.removeIf { it.id == webSocket.id }
+        private fun acceptClosingConnection(webSocket: WebSocket) {
+            if (destroyed.get()) {
+                return
+            }
 
-            if (removed) {
-                if (isLast) {
-                    reconnectSafe()
-                }
-                if (totalConnections() <= 1) {
-                    deduplicator.reset()
-                }
-                if (connections.isEmpty()) {
-                    sendQueue.pause()
-                    handler.onUnavailable(this)
+            mainQueue.submit {
+                val isLast = connections.lastOrNull()?.id == webSocket.id
+                val removed = connections.removeIf { it.id == webSocket.id }
+
+                if (removed) {
+                    if (isLast) {
+                        reconnectSafe()
+                    }
+                    if (totalConnections() <= 1) {
+                        deduplicator.reset()
+                    }
+                    if (connections.isEmpty()) {
+                        sendQueue.pause()
+                        handler.onUnavailable(this)
+                    }
                 }
             }
         }
@@ -157,6 +175,11 @@ class PerpetualWebSocketFactory(
         }
 
         private fun sendMessageAsync(message: Any, job: CompletableJob) {
+            if (destroyed.get()) {
+                job.complete()
+                return
+            }
+
             sendQueue.submit {
                 val ws = connections.lastOrNull { it.isConnected() }
 
