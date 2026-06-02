@@ -32,7 +32,7 @@ class HandshakeInterceptorFactory {
         )
     }
 
-    private inner class InternalImplementation(
+    private class InternalImplementation(
         private val before: List<InjectionUtils.Injection>,
         private val after: List<InjectionUtils.Injection>,
     ) : HandshakeInterceptor {

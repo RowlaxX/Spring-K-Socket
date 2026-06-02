@@ -31,6 +31,6 @@ interface WebSocket : WebSocketMessageSender {
     fun getClosedReason(): WebSocketException?
     fun hasOpened(): Boolean
     fun isConnected(): Boolean = hasOpened() && !hasClosed()
-    fun isInitialized(): Boolean = currentHandlerIndex + 1 == handlerChain.size && hasOpened()
+    fun isInitialized(): Boolean = currentHandlerIndex + 1 >= handlerChain.size && hasOpened()
 
 }

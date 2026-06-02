@@ -7,6 +7,7 @@ import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.future.asDeferred
 import org.springframework.stereotype.Service
@@ -21,7 +22,6 @@ class ClientWebSocketFactory(
     private val threads: GlobalExecutorsConfiguration,
     private val httpClient: HttpClient
 ) {
-
     fun connectFailsafe(
         name: String,
         properties: WebSocketClientProperties,

@@ -4,6 +4,7 @@ import fr.rowlaxx.springksocket.exception.WebSocketClosedException
 import fr.rowlaxx.springksocket.exception.WebSocketConnectionException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springkutils.io.utils.ByteBufferExtension.getBackingArray
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import tools.jackson.core.util.ByteArrayBuilder
 import java.net.http.WebSocket
 import java.nio.ByteBuffer

@@ -10,11 +10,15 @@ import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springksocket.service.io.ClientWebSocketFactory
 import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
+import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
 import org.springframework.stereotype.Service
+import jakarta.annotation.PreDestroy
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,7 +30,20 @@ class PerpetualWebSocketFactory(
     private val threads: GlobalExecutorsConfiguration,
 ) {
     private val idCounter = AtomicInteger()
-    private val destroyed = AtomicBoolean()
+    private val isShutdown = AtomicBoolean()
+    private val sockets = ConcurrentHashMap<Int, InternalImplementation>()
+
+    @PreDestroy
+    fun shutdown() {
+        isShutdown.set(true)
+        runBlocking {
+            while (sockets.isNotEmpty()) {
+                sockets.values.toList()
+                    .onEach { it.close() }
+                    .forEach { it.awaitClose() }
+            }
+        }
+    }
 
     fun create(
         name: String,
@@ -36,6 +53,10 @@ class PerpetualWebSocketFactory(
         shiftDuration: Duration,
         switchDuration: Duration,
     ): PerpetualWebSocket {
+        if (isShutdown.get()) {
+            throw IllegalStateException("Application is shutting down")
+        }
+
         val id = idCounter.incrementAndGet()
         val instance = InternalImplementation(
             id = id,
@@ -48,6 +69,7 @@ class PerpetualWebSocketFactory(
         )
 
         instance.reconnectSafe()
+        sockets[id] = instance
         return instance
     }
 
@@ -83,10 +105,6 @@ class PerpetualWebSocketFactory(
         private val handlerChain = initializers.plus(handlerProxy)
 
         fun reconnectSafe() {
-            if (destroyed.get()) {
-                return
-            }
-
             mainQueue.submit {
                 if (connecting) {
                     return@submit
@@ -108,10 +126,6 @@ class PerpetualWebSocketFactory(
         }
 
         private fun acceptOpeningConnection(webSocket: WebSocket) {
-            if (destroyed.get()) {
-                return
-            }
-
             mainQueue.submit {
                 connecting = false
                 connections.add(webSocket)
@@ -132,10 +146,6 @@ class PerpetualWebSocketFactory(
         }
 
         private fun acceptClosingConnection(webSocket: WebSocket) {
-            if (destroyed.get()) {
-                return
-            }
-
             mainQueue.submit {
                 val isLast = connections.lastOrNull()?.id == webSocket.id
                 val removed = connections.removeIf { it.id == webSocket.id }
@@ -175,11 +185,6 @@ class PerpetualWebSocketFactory(
         }
 
         private fun sendMessageAsync(message: Any, job: CompletableJob) {
-            if (destroyed.get()) {
-                job.complete()
-                return
-            }
-
             sendQueue.submit {
                 val ws = connections.lastOrNull { it.isConnected() }
 
@@ -195,6 +200,18 @@ class PerpetualWebSocketFactory(
                     }
                 }
             }
+        }
+
+        internal fun close() {
+            sendQueue.close()
+            mainQueue.close()
+            sockets.remove(id)
+        }
+
+        internal suspend fun awaitClose() {
+            log.info("Awaiting close for {}", name)
+            sendQueue.join()
+            mainQueue.join()
         }
     }
 }

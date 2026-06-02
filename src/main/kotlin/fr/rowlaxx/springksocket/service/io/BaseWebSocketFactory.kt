@@ -12,7 +12,6 @@ import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import org.springframework.stereotype.Service
 import java.io.IOException
@@ -22,6 +21,7 @@ import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 @Service
@@ -30,14 +30,17 @@ class BaseWebSocketFactory(
 ) {
     private val idCounter = AtomicLong()
     private val sockets = ConcurrentHashMap<Long, BaseWebSocket>()
+    private val isShutdown = AtomicBoolean()
+
 
     @PreDestroy
     fun destroy() {
+        isShutdown.set(true)
         runBlocking {
             while (sockets.isNotEmpty()) {
                 sockets.values.toList()
-                    .map { it.closeAsync("Application closed") }
-                    .joinAll()
+                    .onEach { it.closeAsync("Application Closed") }
+                    .forEach { it.joinClose() }
             }
         }
     }
@@ -53,8 +56,15 @@ class BaseWebSocketFactory(
         override val readTimeout: Duration,
         override val attributes: WebSocketAttributes = WebSocketAttributes()
     ) : WebSocket {
-        private val mainQueue = TaskQueue(factory.threads.ioDispatcher)
-        private val sendQueue = TaskQueue(factory.threads.ioDispatcher, paused = true)
+        override val id = factory.idCounter.andIncrement
+
+        init {
+            if (factory.isShutdown.get()) throw IllegalStateException("Cannot create a websocket since application is being shutdown")
+            if (pingAfter.isNegative) throw IllegalArgumentException("pingAfter must be a positive integer")
+            if (readTimeout.isNegative) throw IllegalArgumentException("readTimeout must be a positive integer")
+            if (initTimeout.isNegative) throw IllegalArgumentException("initTimeout must be a positive integer")
+            factory.sockets[id] = this
+        }
 
         private var handlerIndex: Int = 0
         private val lastInData = AtomicLong()
@@ -66,21 +76,24 @@ class BaseWebSocketFactory(
         private var nextInitTimeout: Future<*>? = null
 
 
-        override val id = factory.idCounter.andIncrement
         override val currentHandlerIndex: Int get() = handlerIndex
 
-        init {
-            if (pingAfter.isNegative) throw IllegalArgumentException("pingAfter must be a positive integer")
-            if (readTimeout.isNegative) throw IllegalArgumentException("readTimeout must be a positive integer")
-            if (initTimeout.isNegative) throw IllegalArgumentException("initTimeout must be a positive integer")
-            factory.sockets[id] = this
-        }
+        private val mainQueue = TaskQueue(factory.threads.ioDispatcher)
+        private val sendQueue = TaskQueue(factory.threads.ioDispatcher, paused = true)
 
         override fun hasOpened(): Boolean = opened
         override fun getClosedReason(): WebSocketException? = closedWith
 
-        private fun <T> delayed(delay: Duration, action: () -> T): Future<T> {
-            return factory.threads.taskScheduler.scheduledExecutor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
+        private fun <T> delayed(delay: Duration, action: () -> T): Future<T>? {
+            try {
+                return factory.threads.taskScheduler.scheduledExecutor.schedule<T>(
+                    action,
+                    delay.toMillis(),
+                    TimeUnit.MILLISECONDS
+                )
+            } catch (t: Throwable) {
+                return null
+            }
         }
 
         private inline fun runHandler(handler: WebSocketHandler, action: WebSocketHandler.(WebSocket) -> Unit) {
@@ -101,11 +114,12 @@ class BaseWebSocketFactory(
 
             if (expired && lastInData.compareAndSet(last, now)) {
                 nextPing?.cancel(true)
+                nextReadTimeout?.cancel(true)
+
                 nextPing = delayed(pingAfter) {
                     sendQueue.submit { pingNow().join() }
                 }
 
-                nextReadTimeout?.cancel(true)
                 nextReadTimeout = delayed(readTimeout) {
                     closeWith(WebSocketConnectionException("Read timeout"))
                 }
@@ -240,8 +254,13 @@ class BaseWebSocketFactory(
                     else -> WebSocketConnectionException("Unknown exception : ${e.message}")
                 }
 
-                mainQueue.submit { unsafeCloseWith(ex) }
+                closeWith(ex)
             }
+        }
+
+        internal suspend fun joinClose() {
+            sendQueue.join()
+            mainQueue.join()
         }
     }
 }
