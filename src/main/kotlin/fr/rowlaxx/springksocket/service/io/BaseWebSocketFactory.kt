@@ -91,7 +91,7 @@ class BaseWebSocketFactory(
                     delay.toMillis(),
                     TimeUnit.MILLISECONDS
                 )
-            } catch (t: Throwable) {
+            } catch (t: Exception) {
                 return null
             }
         }

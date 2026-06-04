@@ -121,8 +121,12 @@ class PerpetualWebSocketFactory(
             return connections.size + if (connecting) 1 else 0
         }
 
-        private fun <T> delayed(delay: Duration, action: () -> T): Future<T> {
-            return threads.taskScheduler.scheduledExecutor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
+        private fun <T> delayed(delay: Duration, action: () -> T): Future<T>? {
+            try {
+                return threads.taskScheduler.scheduledExecutor.schedule<T>( action, delay.toMillis(), TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                return null
+            }
         }
 
         private fun acceptOpeningConnection(webSocket: WebSocket) {
