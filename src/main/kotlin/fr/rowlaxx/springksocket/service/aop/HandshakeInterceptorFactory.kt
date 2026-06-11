@@ -28,13 +28,15 @@ class HandshakeInterceptorFactory {
 
         return InternalImplementation(
             after = after,
-            before = before
+            before = before,
+            bean = bean
         )
     }
 
     private class InternalImplementation(
         private val before: List<InjectionUtils.Injection>,
         private val after: List<InjectionUtils.Injection>,
+        private val bean: Any
     ) : HandshakeInterceptor {
 
         override fun beforeHandshake(
@@ -52,7 +54,7 @@ class HandshakeInterceptorFactory {
 
             before.filter { it.canInvoke(*args) }.forEach {
                 try {
-                    val result = it.invoke(it, *args)
+                    val result = it.invoke(bean, *args)
 
                     if (result == false) {
                         return false
@@ -77,7 +79,7 @@ class HandshakeInterceptorFactory {
 
             after.filter { it.canInvoke(*args) }.forEach {
                 try {
-                    it.invoke(it, *args)
+                    it.invoke(bean, *args)
                 } catch (e: Exception) {
                     log.warn("Method ${it.method} threw an Exception", e)
                 }

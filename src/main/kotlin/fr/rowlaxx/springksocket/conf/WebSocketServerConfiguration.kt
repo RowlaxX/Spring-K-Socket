@@ -39,18 +39,19 @@ class WebSocketServerConfiguration(
             }
 
             val name = anno.name.ifEmpty { type.simpleName }
-            val handlerChain = anno.initializers
+            val chain = anno.initializers
                 .map { applicationContext.getBean(it.java) }
                 .plus(bean)
-                .map {
-                    val (ser, des) = serDesExtractor.extract(anno, bean)
-                    handlerFactory.extract(it, ser, des)
-                }
 
-            val handshakeInterceptor = handshakeInterceptorFactory.extract(handlerChain.first())
+            val handlers = chain.map {
+                val (ser, des) = serDesExtractor.extract(anno, bean)
+                handlerFactory.extract(it, ser, des)
+            }
+
+            val handshakeInterceptor = handshakeInterceptorFactory.extract(chain.first())
             val config = WebSocketServerProperties(
                 name = name,
-                handlerChain = handlerChain,
+                handlerChain = handlers,
                 initTimeout = Duration.parse(anno.initTimeout),
                 readTimeout = Duration.parse(anno.readTimeout),
                 pingAfter = Duration.parse(anno.pingAfter),
