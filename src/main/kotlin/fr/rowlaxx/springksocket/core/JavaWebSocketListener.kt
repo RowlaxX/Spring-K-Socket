@@ -59,7 +59,7 @@ class JavaWebSocketListener(
 
             if (last) {
                 val result = currentBinary.toByteArray()
-                currentBinary = ByteArrayBuilder()
+                currentBinary.reset()
                 onBinaryMessage(result)
             }
         }
@@ -79,7 +79,7 @@ class JavaWebSocketListener(
 
             if (last) {
                 val result = currentMessage.toString()
-                currentMessage = StringBuilder()
+                currentMessage.clear()
                 onTextMessage(result)
             }
         }
