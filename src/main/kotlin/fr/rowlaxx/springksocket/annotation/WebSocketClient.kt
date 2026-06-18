@@ -19,7 +19,6 @@ annotation class WebSocketClient(
     val defaultSerializer: KClass<out WebSocketSerializer> = WebSocketSerializer.Passthrough::class,
     val defaultDeserializer: KClass<out WebSocketDeserializer> = WebSocketDeserializer.Passthrough::class,
 
-    val connectTimeout: String = "PT5S",
     val initTimeout: String = "PT10S",
     val pingAfter: String = "PT5S",
     val readTimeout: String = "PT10S",

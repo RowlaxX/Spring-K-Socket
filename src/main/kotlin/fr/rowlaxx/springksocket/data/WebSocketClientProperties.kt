@@ -10,7 +10,6 @@ data class WebSocketClientProperties(
 
     val initTimeout: Duration,
     val pingAfter: Duration,
-    val connectTimeout: Duration,
     val readTimeout: Duration,
 ) {
     init {
@@ -19,9 +18,6 @@ data class WebSocketClientProperties(
         }
         else if (initTimeout.isNegative) {
             throw IllegalArgumentException("initTimeout must be positive")
-        }
-        else if (connectTimeout.isNegative) {
-            throw IllegalArgumentException("connectTimeout must be positive")
         }
         else if (readTimeout.isNegative) {
             throw IllegalArgumentException("readTimeout must be positive")

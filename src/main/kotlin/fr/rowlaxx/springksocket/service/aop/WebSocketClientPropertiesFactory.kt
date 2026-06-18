@@ -57,7 +57,6 @@ class WebSocketClientPropertiesFactory(
         return WebSocketClientProperties(
             uri = URI.create(anno.url),
             initTimeout = Duration.parse(anno.initTimeout),
-            connectTimeout = Duration.parse(anno.connectTimeout),
             readTimeout = Duration.parse(anno.readTimeout),
             pingAfter = Duration.parse(anno.pingAfter),
             headers = headers.toJavaHeaders()

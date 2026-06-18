@@ -1,26 +1,29 @@
 package fr.rowlaxx.springksocket.service.io
 
-import fr.rowlaxx.springksocket.core.JavaWebSocketListener
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
+import fr.rowlaxx.springksocket.exception.WebSocketClosedException
+import fr.rowlaxx.springksocket.exception.WebSocketConnectionException
 import fr.rowlaxx.springksocket.exception.WebSocketCreationException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
-import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
+import io.netty.util.concurrent.Future as NettyFuture
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.future.asDeferred
+import org.asynchttpclient.AsyncHttpClient
+import org.asynchttpclient.ws.WebSocketListener
+import org.asynchttpclient.ws.WebSocketUpgradeHandler
 import org.springframework.stereotype.Service
-import java.net.http.HttpClient
-import java.nio.ByteBuffer
-import java.time.Duration
+import tools.jackson.core.util.ByteArrayBuilder
 import java.util.concurrent.TimeUnit
+import org.asynchttpclient.ws.WebSocket as AhcWebSocket
 
 @Service
 class ClientWebSocketFactory(
     private val baseFactory: BaseWebSocketFactory,
     private val threads: GlobalExecutorsConfiguration,
-    private val httpClient: HttpClient
+    private val httpClient: AsyncHttpClient,
 ) {
     fun connectFailsafe(
         name: String,
@@ -45,8 +48,9 @@ class ClientWebSocketFactory(
             properties = properties,
             handlerChain = handlerChain,
             name = name,
+            client = httpClient,
             onInitializationError = onInitializationError
-        ).apply { connect(httpClient, properties.connectTimeout) }
+        ).apply { connect() }
     }
 
     private class InternalImplementation(
@@ -54,6 +58,7 @@ class ClientWebSocketFactory(
         factory: BaseWebSocketFactory,
         properties: WebSocketClientProperties,
         handlerChain: List<WebSocketHandler>,
+        private val client: AsyncHttpClient,
         private val onInitializationError: (WebSocketException) -> Unit
     ) : BaseWebSocketFactory.BaseWebSocket(
         factory = factory,
@@ -65,45 +70,76 @@ class ClientWebSocketFactory(
         initTimeout = properties.initTimeout,
         requestHeaders = properties.headers
     ) {
-        private var javaWS: java.net.http.WebSocket? = null
+        @Volatile
+        private var ws: AhcWebSocket? = null
 
-        fun connect(client: HttpClient, timeout: Duration) {
-            val listener = JavaWebSocketListener(
-                onOpened = { openWith(it) },
-                onError = { closeWith(it) },
-                onTextMessage = { acceptMessage(it) },
-                onBinaryMessage = { acceptMessage(it) },
-                onInData = { onDataReceived() },
-            )
+        private val textBuffer = StringBuilder()
+        private val binaryBuffer = ByteArrayBuilder()
 
-            val builder = client.newWebSocketBuilder()
-                .connectTimeout(timeout)
-
-            requestHeaders.map()
-                .flatMap { it.value.map { v -> it.key to v } }
-                .forEach { builder.header(it.first, it.second) }
-
-            builder.buildAsync(uri, listener)
-                .exceptionally {
-                    closeWith(WebSocketCreationException(it.message ?: "Unknown error"))
-                    null
+        fun connect() {
+            val listener = object : WebSocketListener {
+                override fun onOpen(webSocket: AhcWebSocket) {
+                    onDataReceived()
+                    openWith(webSocket)
                 }
+
+                override fun onClose(webSocket: AhcWebSocket, code: Int, reason: String?) {
+                    closeWith(WebSocketClosedException(reason ?: "", code))
+                }
+
+                override fun onError(t: Throwable) {
+                    closeWith(WebSocketConnectionException(t.message ?: "WebSocket error"))
+                }
+
+                override fun onTextFrame(payload: String, finalFragment: Boolean, rsv: Int) {
+                    onDataReceived()
+                    if (finalFragment && textBuffer.isEmpty()) {
+                        acceptMessage(payload)
+                    } else {
+                        textBuffer.append(payload)
+                        if (finalFragment) {
+                            val msg = textBuffer.toString()
+                            textBuffer.setLength(0)
+                            acceptMessage(msg)
+                        }
+                    }
+                }
+
+                override fun onBinaryFrame(payload: ByteArray, finalFragment: Boolean, rsv: Int) {
+                    onDataReceived()
+                    if (finalFragment && binaryBuffer.size() == 0) {
+                        acceptMessage(payload)
+                    } else {
+                        binaryBuffer.write(payload)
+                        if (finalFragment) {
+                            val msg = binaryBuffer.toByteArray()
+                            binaryBuffer.reset()
+                            acceptMessage(msg)
+                        }
+                    }
+                }
+
+                override fun onPingFrame(payload: ByteArray) = onDataReceived()
+                override fun onPongFrame(payload: ByteArray) = onDataReceived()
+            }
+
+            try {
+                val request = client.prepareGet(uri.toString())
+                requestHeaders.map().forEach { (key, values) -> values.forEach { request.addHeader(key, it) } }
+                request.execute(WebSocketUpgradeHandler.Builder().addWebSocketListener(listener).build())
+            } catch (t: Throwable) {
+                closeWith(WebSocketCreationException(t.message ?: "Unknown error"))
+            }
         }
 
-        override fun pingNow(): Job {
-            return javaWS!!.sendPing(ByteBuffer.allocate(0)).asDeferred()
-        }
+        override fun pingNow(): Job = sendJob { it.sendPingFrame() }
 
-        override fun sendText(msg: String): Job {
-            return javaWS!!.sendText(msg, true).asDeferred()
-        }
+        override fun sendText(msg: String): Job = sendJob { it.sendTextFrame(msg) }
 
-        override fun sendBinary(msg: ByteArray): Job {
-            return javaWS!!.sendBinary(ByteBuffer.wrap(msg), true).asDeferred()
-        }
+        override fun sendBinary(msg: ByteArray): Job = sendJob { it.sendBinaryFrame(msg) }
 
         override fun handleClose() {
-            javaWS?.abort()
+            ws?.takeIf { it.isOpen }?.sendCloseFrame()
 
             if (!isInitialized()) {
                 onInitializationError(getClosedReason()!!)
@@ -111,8 +147,25 @@ class ClientWebSocketFactory(
         }
 
         override fun handleOpen(obj: Any) {
-            javaWS = obj as java.net.http.WebSocket
+            ws = obj as AhcWebSocket
+        }
+
+        private fun sendJob(action: (AhcWebSocket) -> NettyFuture<Void>): Job {
+            val deferred = Job()
+            val socket = ws
+            if (socket == null) {
+                deferred.completeExceptionally(WebSocketConnectionException("WebSocket is not connected"))
+                return deferred
+            }
+            try {
+                action(socket).addListener {
+                    if (it.isSuccess) deferred.complete(Unit)
+                    else deferred.completeExceptionally(it.cause() ?: WebSocketConnectionException("Send failed"))
+                }
+            } catch (t: Throwable) {
+                deferred.completeExceptionally(t)
+            }
+            return deferred
         }
     }
-
 }
