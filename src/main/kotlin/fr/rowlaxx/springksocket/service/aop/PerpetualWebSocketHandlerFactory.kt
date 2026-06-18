@@ -14,6 +14,8 @@ import fr.rowlaxx.springkutils.reflection.utils.InjectionUtils.invoke
 import fr.rowlaxx.springkutils.reflection.utils.InjectionUtils.toInjectionSupport
 import fr.rowlaxx.springkutils.reflection.utils.ReflectionUtils
 import org.springframework.stereotype.Service
+import java.util.HashMap
+import java.util.concurrent.ConcurrentHashMap
 
 @Service
 class PerpetualWebSocketHandlerFactory() {
@@ -51,6 +53,8 @@ class PerpetualWebSocketHandlerFactory() {
         private val message: List<InjectionUtils.Injection>,
     ) : PerpetualWebSocketHandler {
 
+        private val handlersByMessageType = HashMap<Class<*>, List<InjectionUtils.Injection>>()
+
         override fun onAvailable(webSocket: PerpetualWebSocket) {
             val args = arrayOf(webSocket)
 
@@ -64,11 +68,23 @@ class PerpetualWebSocketHandlerFactory() {
                 return
             }
 
-            val args1 = arrayOf(webSocket, msg)
+            val handlers = handlersByMessageType[msg.javaClass]
+                ?: resolveHandlers(webSocket, msg.javaClass)
 
-            message.filter { it.canInvoke(*args1) }
-                .apply { ifEmpty { log.warn("Unhandled message of type ${msg::class.simpleName} in bean ${bean::class.simpleName}") }}
-                .forEach { runInWS(it, webSocket, *args1) }
+            for (i in handlers.indices) {
+                runInWS(handlers[i], webSocket, webSocket, msg)
+            }
+        }
+
+        private fun resolveHandlers(webSocket: PerpetualWebSocket, type: Class<*>): List<InjectionUtils.Injection> {
+            // @OnMessage methods take (PerpetualWebSocket, MessageType); selection depends only on the
+            // message class, so the result is stable per type and safe to memoize.
+            val resolved = message.filter { it.canInvoke(webSocket.javaClass, type) }
+            if (resolved.isEmpty()) {
+                log.warn("Unhandled message of type ${type.simpleName} in bean ${bean::class.simpleName}")
+            }
+            handlersByMessageType[type] = resolved
+            return resolved
         }
 
         override fun onUnavailable(webSocket: PerpetualWebSocket) {
