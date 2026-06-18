@@ -118,7 +118,11 @@ class ClientWebSocketFactory(
                     }
                 }
 
-                override fun onPingFrame(payload: ByteArray) = onDataReceived()
+                override fun onPingFrame(payload: ByteArray) {
+                    onDataReceived()
+                    ws?.sendPongFrame(payload)
+                }
+
                 override fun onPongFrame(payload: ByteArray) = onDataReceived()
             }
 
