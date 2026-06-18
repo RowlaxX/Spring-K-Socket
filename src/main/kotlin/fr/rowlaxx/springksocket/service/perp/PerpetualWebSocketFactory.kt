@@ -83,7 +83,7 @@ class PerpetualWebSocketFactory(
         override val handler: PerpetualWebSocketHandler
     ) : PerpetualWebSocket {
         private val mainQueue = TaskQueue(threads.ioDispatcher)
-        private val sendQueue = TaskQueue(threads.ioDispatcher, paused = false)
+        private val sendQueue = TaskQueue(threads.ioDispatcher, paused = true)
 
         private val connections = LinkedList<WebSocket>()
         private var nextReconnection: Future<*>? = null
