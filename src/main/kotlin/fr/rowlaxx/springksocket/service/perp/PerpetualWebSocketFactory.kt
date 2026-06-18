@@ -8,7 +8,7 @@ import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springksocket.service.io.ClientWebSocketFactory
-import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
+import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.CompletableJob
@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Service
 class PerpetualWebSocketFactory(
     private val webSocketFactory: ClientWebSocketFactory,
-    private val threads: GlobalExecutorsConfiguration,
+    private val threads: GlobalThreadConfiguration,
 ) {
     private val idCounter = AtomicInteger()
     private val isShutdown = AtomicBoolean()

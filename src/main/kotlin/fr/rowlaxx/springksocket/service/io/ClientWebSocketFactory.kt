@@ -7,9 +7,8 @@ import fr.rowlaxx.springksocket.exception.WebSocketCreationException
 import fr.rowlaxx.springksocket.exception.WebSocketException
 import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketHandler
-import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
+import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
 import io.netty.util.concurrent.Future as NettyFuture
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import org.asynchttpclient.AsyncHttpClient
 import org.asynchttpclient.ws.WebSocketListener
@@ -22,7 +21,7 @@ import org.asynchttpclient.ws.WebSocket as AhcWebSocket
 @Service
 class ClientWebSocketFactory(
     private val baseFactory: BaseWebSocketFactory,
-    private val threads: GlobalExecutorsConfiguration,
+    private val threads: GlobalThreadConfiguration,
     private val httpClient: AsyncHttpClient,
 ) {
     fun connectFailsafe(
@@ -151,21 +150,21 @@ class ClientWebSocketFactory(
         }
 
         private fun sendJob(action: (AhcWebSocket) -> NettyFuture<Void>): Job {
-            val deferred = Job()
+            val job = Job()
             val socket = ws
             if (socket == null) {
-                deferred.completeExceptionally(WebSocketConnectionException("WebSocket is not connected"))
-                return deferred
+                job.completeExceptionally(WebSocketConnectionException("WebSocket is not connected"))
+                return job
             }
             try {
                 action(socket).addListener {
-                    if (it.isSuccess) deferred.complete(Unit)
-                    else deferred.completeExceptionally(it.cause() ?: WebSocketConnectionException("Send failed"))
+                    if (it.isSuccess) job.complete()
+                    else job.completeExceptionally(it.cause() ?: WebSocketConnectionException("Send failed"))
                 }
             } catch (t: Throwable) {
-                deferred.completeExceptionally(t)
+                job.completeExceptionally(t)
             }
-            return deferred
+            return job
         }
     }
 }
