@@ -41,11 +41,19 @@ import java.util.concurrent.TimeUnit
 @Timeout(120)
 class PerpetualWebSocketFactoryIT {
 
-    private class EchoServer(port: Int) : WebSocketServer(InetSocketAddress(InetAddress.getLoopbackAddress(), port)) {
+    private class EchoServer(
+        port: Int,
+        private val pushCount: Int = 0,
+    ) : WebSocketServer(InetSocketAddress(InetAddress.getLoopbackAddress(), port)) {
         val started = CountDownLatch(1)
         val received = ConcurrentHashMap.newKeySet<String>()
         override fun onStart() { started.countDown() }
-        override fun onOpen(conn: JWebSocket, handshake: ClientHandshake) {}
+        override fun onOpen(conn: JWebSocket, handshake: ClientHandshake) {
+            if (pushCount > 0) {
+                Thread({ for (i in 0 until pushCount) runCatching { conn.send("S:$i") } }, "push")
+                    .apply { isDaemon = true }.start()
+            }
+        }
         override fun onClose(conn: JWebSocket, code: Int, reason: String?, remote: Boolean) {}
         override fun onError(conn: JWebSocket?, ex: Exception) {}
         override fun onMessage(conn: JWebSocket, message: String) { received += message; conn.send("echo:$message") }
@@ -181,6 +189,43 @@ class PerpetualWebSocketFactoryIT {
             val missing = expected - server.received
             assertTrue(missing.isEmpty(), "under concurrency, ${missing.size} messages were lost e.g. ${missing.take(5)}")
             assertEquals(expected.size, server.received.count { it.startsWith("m-") }, "no duplicates expected on a single connection")
+        } finally {
+            server.stop(1000)
+        }
+    }
+
+    @Test
+    fun `high-concurrency bidirectional traffic is delivered consistently`() {
+        val push = 1_500
+        val server = EchoServer(0, pushCount = push).apply { start() }
+        assertTrue(server.started.await(10, TimeUnit.SECONDS))
+        try {
+            val handler = RecordingHandler()
+            val ws = create(handler, server.port)
+            assertTrue(handler.available.await(15, TimeUnit.SECONDS))
+
+            val threadsN = 12
+            val perThread = 200
+            val sent = (0 until threadsN).flatMap { t -> (0 until perThread).map { "m-$t-$it" } }.toSet()
+
+            val barrier = CyclicBarrier(threadsN)
+            (0 until threadsN).map { t ->
+                Thread {
+                    barrier.await()
+                    repeat(perThread) { i -> ws.sendMessageAsync("m-$t-$i") }
+                }.apply { start() }
+            }.forEach { it.join() }
+
+            val expectedEchoes = sent.map { "echo:$it" }.toSet()
+            val expectedPushes = (0 until push).map { "S:$it" }.toSet()
+            val expectedIn = expectedEchoes + expectedPushes
+
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+            while (!handler.messages.containsAll(expectedIn) && System.nanoTime() < deadline) Thread.sleep(50)
+
+            assertTrue(server.received.containsAll(sent), "server missed ${(sent - server.received).size} concurrent sends")
+            assertTrue(handler.messages.containsAll(expectedPushes), "handler missed some server-initiated pushes")
+            assertTrue(handler.messages.containsAll(expectedEchoes), "handler missed some echoes")
         } finally {
             server.stop(1000)
         }

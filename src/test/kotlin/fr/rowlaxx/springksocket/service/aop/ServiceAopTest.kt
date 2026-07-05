@@ -250,11 +250,15 @@ class ServiceAopTest {
     @WebSocketHandlerProperties(serializer = UpperSerializer::class, deserializer = LowerDeserializer::class)
     class OverridingBean
 
-    @WebSocketClient(url = "ws://x")
-    class DefaultingBean
+    // NB: @WebSocketClient is meta-annotated @Component, and DefaultingBean/AnnotatedClientBean are
+    // deliberately handler-less. They are declared *local* to their test methods so component scanning
+    // (which skips non-independent/local classes) never registers them as real beans in @SpringBootTest.
 
     @Test
     fun `serializer extractor resolves Null, Passthrough, bean-defined, and per-class overrides`() {
+        @WebSocketClient(url = "ws://x")
+        class DefaultingBean
+
         val ctx = StaticApplicationContext()
         ctx.beanFactory.registerSingleton("upper", UpperSerializer())
         ctx.beanFactory.registerSingleton("lower", LowerDeserializer())
@@ -279,9 +283,6 @@ class ServiceAopTest {
 
     // ------------------------------------------------------ WebSocketClientPropertiesFactory
 
-    @WebSocketClient(url = "ws://from-annotation:9000", initTimeout = "PT11S", pingInterval = "PT6S", readTimeout = "PT12S")
-    class AnnotatedClientBean
-
     class MethodClientBean {
         fun props(): WebSocketClientProperties = WebSocketClientProperties(
             uri = URI.create("ws://from-method:8000"),
@@ -294,6 +295,9 @@ class ServiceAopTest {
 
     @Test
     fun `client properties are built from the annotation`() {
+        @WebSocketClient(url = "ws://from-annotation:9000", initTimeout = "PT11S", pingInterval = "PT6S", readTimeout = "PT12S")
+        class AnnotatedClientBean
+
         val ctx = StaticApplicationContext().apply { refresh() }
         val factory = WebSocketClientPropertiesFactory(ctx)
         val props = factory.extract(AnnotatedClientBean())()

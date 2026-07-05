@@ -78,18 +78,6 @@ class ClientWebSocketFactory(
         private val textBuffer = StringBuilder()
         private val binaryBuffer = ByteArrayBuilder()
 
-        // --- Keepalive diagnostics: all epoch millis (0 = never). Written from the Netty IO thread,
-        // read on close; @Volatile is enough since we only need eventual visibility, not atomicity.
-        @Volatile private var lastServerPingAt = 0L
-        @Volatile private var lastPongSentAt = 0L
-        @Volatile private var lastPongSendLatencyMs = -1L
-        @Volatile private var pongSendFailures = 0
-        @Volatile private var lastNativePingSentAt = 0L
-        @Volatile private var lastPongRecvAt = 0L
-        @Volatile private var lastOutboundAt = 0L
-        @Volatile private var lastOutboundLatencyMs = -1L
-        @Volatile private var outboundSendFailures = 0
-
         fun connect() {
             val listener = object : WebSocketListener {
                 override fun onOpen(webSocket: AhcWebSocket) {
@@ -135,23 +123,15 @@ class ClientWebSocketFactory(
 
                 override fun onPingFrame(payload: ByteArray) {
                     onDataReceived()
-                    lastServerPingAt = System.currentTimeMillis()
                     val socket = ws
+
                     if (socket == null) {
-                        // A server PING arrived before handleOpen assigned `ws` — the pong is dropped.
                         log.warn("[{} ({})] Server PING arrived before socket ready; pong NOT sent", name, id)
                         return
                     }
                     val startedAt = System.nanoTime()
                     socket.sendPongFrame(payload).addListener {
-                        if (it.isSuccess) {
-                            lastPongSentAt = System.currentTimeMillis()
-                            lastPongSendLatencyMs = (System.nanoTime() - startedAt) / 1_000_000
-                            if (lastPongSendLatencyMs > KEEPALIVE_WARN_MS) {
-                                log.warn("[{} ({})] Pong send took {}ms (server was waiting)", name, id, lastPongSendLatencyMs)
-                            }
-                        } else {
-                            pongSendFailures++
+                        if (!it.isSuccess) {
                             log.warn("[{} ({})] Pong send FAILED: {}", name, id, it.cause()?.message)
                         }
                     }
@@ -159,7 +139,6 @@ class ClientWebSocketFactory(
 
                 override fun onPongFrame(payload: ByteArray) {
                     onDataReceived()
-                    lastPongRecvAt = System.currentTimeMillis()
                 }
             }
 
@@ -175,7 +154,6 @@ class ClientWebSocketFactory(
         }
 
         override fun pingNow(): Deferred<Unit> {
-            lastNativePingSentAt = System.currentTimeMillis()
             return sendJob { it.sendPingFrame() }
         }
 
@@ -185,66 +163,28 @@ class ClientWebSocketFactory(
 
         override fun handleClose() {
             ws?.takeIf { it.isOpen }?.sendCloseFrame()
-            logKeepaliveSummary()
 
             if (!isInitialized()) {
                 onInitializationError(getClosedReason()!!)
             }
         }
 
-        /**
-         * One-line snapshot of the keepalive state at the moment this socket closed. Since the exchange
-         * disconnects (Binance `Pong timeout`, Kucoin `Bye`, Mexc) are the events we cannot explain, this
-         * tells us whether *we* stopped sending pongs/pings on time, or whether inbound simply went quiet.
-         */
-        private fun logKeepaliveSummary() {
-            val now = System.currentTimeMillis()
-            fun ago(t: Long) = if (t == 0L) "never" else "${now - t}ms"
-            log.info(
-                "[{} ({})] keepalive@close: lastInbound={} lastServerPing={} lastPongSent={} (lat={}ms, {} fail) " +
-                    "lastNativePing={} lastPongRecv={} lastOutbound={} (lat={}ms, {} fail)",
-                name, id,
-                ago(lastInboundAtMillis()),
-                ago(lastServerPingAt),
-                ago(lastPongSentAt), lastPongSendLatencyMs, pongSendFailures,
-                ago(lastNativePingSentAt),
-                ago(lastPongRecvAt),
-                ago(lastOutboundAt), lastOutboundLatencyMs, outboundSendFailures,
-            )
-        }
-
         override fun handleOpen(obj: Any) {
             ws = obj as AhcWebSocket
         }
 
-        private fun sendJob(action: (AhcWebSocket) -> NettyFuture<Void>): Deferred<Unit> {
-            val job = CompletableDeferred<Unit>()
-            val socket = ws
-            if (socket == null) {
-                outboundSendFailures++
-                job.completeExceptionally(WebSocketConnectionException("WebSocket is not connected"))
-                return job
-            }
-            val startedAt = System.nanoTime()
+        private inline fun sendJob(action: (AhcWebSocket) -> NettyFuture<Void>): Deferred<Unit> {
+            val deferred = CompletableDeferred<Unit>()
             try {
+                val socket = ws ?: throw WebSocketConnectionException("WebSocket is not connected")
                 action(socket).addListener {
-                    if (it.isSuccess) {
-                        lastOutboundAt = System.currentTimeMillis()
-                        lastOutboundLatencyMs = (System.nanoTime() - startedAt) / 1_000_000
-                        if (lastOutboundLatencyMs > KEEPALIVE_WARN_MS) {
-                            log.warn("[{} ({})] Outbound frame send took {}ms", name, id, lastOutboundLatencyMs)
-                        }
-                        job.complete(Unit)
-                    } else {
-                        outboundSendFailures++
-                        job.completeExceptionally(it.cause() ?: WebSocketConnectionException("Send failed"))
-                    }
+                    if (it.isSuccess) deferred.complete(Unit)
+                    else deferred.completeExceptionally(it.cause() ?: WebSocketConnectionException("Send failed"))
                 }
             } catch (t: Throwable) {
-                outboundSendFailures++
-                job.completeExceptionally(t)
+                deferred.completeExceptionally(t)
             }
-            return job
+            return deferred
         }
     }
 
