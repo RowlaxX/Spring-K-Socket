@@ -31,6 +31,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-slf4j")
     testImplementation("org.springframework.boot:spring-boot-starter-websocket-test")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+    testImplementation("org.java-websocket:Java-WebSocket:1.6.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     compileOnly("org.jetbrains:annotations:24.1.0")
 }

@@ -6,7 +6,8 @@ import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
@@ -21,7 +22,7 @@ class UnhandledMsg
 /** Minimal fake; only [sendMessageAsync] is reachable, and only if a handler returns a value. */
 class FakePerpetualWebSocket : PerpetualWebSocket {
     val sent = mutableListOf<Any>()
-    override fun sendMessageAsync(message: Any): Job { sent += message; return Job() }
+    override fun sendMessageAsync(message: Any): Deferred<Unit> { sent += message; return CompletableDeferred(Unit) }
     override val id = 0
     override val name = "fake"
     override val switchDuration: Duration = Duration.ZERO

@@ -12,7 +12,7 @@ interface WebSocket : WebSocketMessageSender {
     val id: Long
     val name: String
     val uri: URI
-    val pingAfter: Duration
+    val pingInterval: Duration
     val readTimeout: Duration
     val initTimeout: Duration
 

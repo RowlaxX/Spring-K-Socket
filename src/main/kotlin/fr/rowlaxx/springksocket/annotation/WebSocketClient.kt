@@ -20,8 +20,8 @@ annotation class WebSocketClient(
     val defaultDeserializer: KClass<out WebSocketDeserializer> = WebSocketDeserializer.Passthrough::class,
 
     val initTimeout: String = "PT10S",
-    val pingAfter: String = "PT5S",
-    val readTimeout: String = "PT10S",
+    val pingInterval: String = "PT5S",
+    val readTimeout: String = "PT15S",
 
     val shiftDuration: String = "PT4H",
     val switchDuration: String = "PT3S"

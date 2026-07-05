@@ -11,6 +11,8 @@ import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import jakarta.annotation.PreDestroy
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import org.springframework.stereotype.Service
@@ -23,6 +25,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @Service
 class BaseWebSocketFactory(
@@ -52,7 +55,7 @@ class BaseWebSocketFactory(
         override val requestHeaders: HttpHeaders,
         override val initTimeout: Duration,
         override val handlerChain: List<WebSocketHandler>,
-        override val pingAfter: Duration,
+        override val pingInterval: Duration,
         override val readTimeout: Duration,
         override val attributes: WebSocketAttributes = WebSocketAttributes()
     ) : WebSocket {
@@ -60,19 +63,22 @@ class BaseWebSocketFactory(
 
         init {
             if (factory.isShutdown.get()) throw IllegalStateException("Cannot create a websocket since application is being shutdown")
-            if (pingAfter.isNegative) throw IllegalArgumentException("pingAfter must be a positive integer")
+            if (pingInterval.isNegative) throw IllegalArgumentException("pingInterval must be a positive integer")
             if (readTimeout.isNegative) throw IllegalArgumentException("readTimeout must be a positive integer")
             if (initTimeout.isNegative) throw IllegalArgumentException("initTimeout must be a positive integer")
             factory.sockets[id] = this
         }
 
-        private var handlerIndex: Int = 0
+        // handlerIndex is mutated only on mainQueue but read (currentHandlerIndex) from any thread.
+        @Volatile private var handlerIndex: Int = 0
         private val lastInData = AtomicLong()
-        private var opened = false
-        private var closedWith: WebSocketException? = null
+        @Volatile private var opened = false
+        @Volatile private var closedWith: WebSocketException? = null
 
-        private var nextPing: Future<*>? = null
-        private var nextReadTimeout: Future<*>? = null
+        // pingSender / nextInitTimeout are confined to mainQueue. nextReadTimeout is rescheduled from
+        // the IO threads (onDataReceived) AND cancelled on mainQueue (close), so it must be atomic.
+        private var pingSender: Future<*>? = null
+        private val nextReadTimeout = AtomicReference<Future<*>?>()
         private var nextInitTimeout: Future<*>? = null
 
 
@@ -83,6 +89,9 @@ class BaseWebSocketFactory(
 
         override fun hasOpened(): Boolean = opened
         override fun getClosedReason(): WebSocketException? = closedWith
+
+        /** Epoch millis of the last inbound frame (throttled to ~100ms); 0 if none yet. For keepalive diagnostics. */
+        protected fun lastInboundAtMillis(): Long = lastInData.get()
 
         private fun <T> delayed(delay: Duration, action: () -> T): Future<T>? {
             try {
@@ -96,45 +105,66 @@ class BaseWebSocketFactory(
             }
         }
 
+        private fun rate(period: Duration, action: () -> Unit): Future<*>? {
+            try {
+                val millis = period.toMillis()
+                return factory.threads.taskScheduler.scheduledExecutor.scheduleAtFixedRate(
+                    { runCatching { action() }.onFailure { factory.log.warn("[{} ({})] Scheduled task failed", name, id, it) } },
+                    millis,
+                    millis,
+                    TimeUnit.MILLISECONDS
+                )
+            } catch (t: Exception) {
+                return null
+            }
+        }
+
         private inline fun runHandler(handler: WebSocketHandler, action: WebSocketHandler.(WebSocket) -> Unit) {
             runCatching { action(handler, this) }
                 .onFailure { factory.log.error("[{} ({})] A handler error occurred", name, id, it) }
         }
 
-        protected abstract fun pingNow(): Job
-        protected abstract fun sendText(msg: String): Job
-        protected abstract fun sendBinary(msg: ByteArray): Job
+        protected abstract fun pingNow(): Deferred<Unit>
+        protected abstract fun sendText(msg: String): Deferred<Unit>
+        protected abstract fun sendBinary(msg: ByteArray): Deferred<Unit>
         protected abstract fun handleClose()
         protected abstract fun handleOpen(obj: Any)
 
         fun onDataReceived() {
+            if (hasClosed()) return
+
             val last = lastInData.get()
             val now = System.currentTimeMillis()
-            val expired = last + 100 < now //Improve efficiency on large traffic websocket
 
-            if (expired && lastInData.compareAndSet(last, now)) {
-                nextPing?.cancel(true)
-                nextReadTimeout?.cancel(true)
+            if (last + 100 >= now || !lastInData.compareAndSet(last, now)) {
+                return
+            }
 
-                nextPing = delayed(pingAfter) {
-                    sendQueue.submit { pingNow().join() }
-                }
+            val next = delayed(readTimeout) {
+                closeWith(WebSocketConnectionException("Read timeout"))
+            }
 
-                nextReadTimeout = delayed(readTimeout) {
-                    closeWith(WebSocketConnectionException("Read timeout"))
-                }
+            nextReadTimeout.getAndSet(next)?.cancel(true)
+
+            if (hasClosed()) {
+                nextReadTimeout.getAndSet(null)?.cancel(true)
             }
         }
-
-
-
 
         override fun closeAsync(reason: String, code: Int): Job {
             return closeWith(WebSocketClosedException(reason, code))
         }
 
-        override fun sendMessageAsync(message: Any): Job {
-            return sendQueue.submit { unsafeSendMessage(message) }
+        override fun sendMessageAsync(message: Any): Deferred<Unit> {
+            val result = CompletableDeferred<Unit>()
+            sendQueue.submit {
+                runCatching { unsafeSendMessage(message) }
+                    .onSuccess { result.complete(Unit) }
+                    .onFailure { result.completeExceptionally(it) }
+            }.invokeOnCompletion { cause ->
+                cause?.let(result::completeExceptionally)
+            }
+            return result
         }
 
         protected fun closeWith(reason: WebSocketException): Job {
@@ -153,9 +183,6 @@ class BaseWebSocketFactory(
             return mainQueue.submit { unsafeCompleteHandler() }
         }
 
-
-
-
         private fun unsafeOpenWith(obj: Any) {
             if (hasClosed() || hasOpened()) {
                 return
@@ -171,9 +198,26 @@ class BaseWebSocketFactory(
             }
 
             onDataReceived()
+            startPing()
             log.debug("[{} ({})] Opened", name, id)
             sendQueue.resume()
             runHandler(currentHandler) { onAvailable(it) }
+        }
+
+        private fun startPing() {
+            if (pingInterval.isZero) {
+                return
+            }
+
+            pingSender = rate(pingInterval) {
+                sendQueue.submit {
+                    try {
+                        pingNow().await()
+                    } catch (e: Exception) {
+                        closeWith(WebSocketConnectionException("Ping failed : ${e.message}"))
+                    }
+                }
+            }
         }
 
         private fun unsafeCloseWith(reason: WebSocketException) {
@@ -182,10 +226,11 @@ class BaseWebSocketFactory(
             }
 
             closedWith = reason
-            nextReadTimeout?.cancel(true)
-            nextReadTimeout = null
-            nextPing?.cancel(true)
-            nextPing = null
+            nextReadTimeout.getAndSet(null)?.cancel(true)
+            pingSender?.cancel(true)
+            pingSender = null
+            nextInitTimeout?.cancel(true)
+            nextInitTimeout = null
             mainQueue.close()
             sendQueue.close()
             factory.sockets.remove(id)
@@ -230,32 +275,35 @@ class BaseWebSocketFactory(
 
         private suspend fun unsafeSendMessage(msg: Any) {
             if (hasClosed()) {
-                return
+                throw closedWith ?: WebSocketClosedException("Closed", 1000)
             }
 
-            val ser = when (msg) {
+            try {
+                sendFrame(msg).await()
+            } catch (e: Exception) {
+                val ex = mapSendException(e)
+                closeWith(ex)
+                throw ex
+            }
+        }
+
+        private fun sendFrame(msg: Any): Deferred<Unit> {
+            val frame = when (msg) {
                 is String -> msg
                 is ByteArray -> msg
                 else -> currentHandler.serializer.toStringOrByteArray(msg)
             }
-
-            val job = when (ser) {
-                is String -> sendText(ser)
-                is ByteArray -> sendBinary(ser)
+            return when (frame) {
+                is String -> sendText(frame)
+                is ByteArray -> sendBinary(frame)
                 else -> throw IllegalStateException("Message must be a String or a ByteArray after serialization. Current type : ${msg.javaClass.simpleName}")
             }
+        }
 
-            try {
-                job.join()
-            } catch (e: Exception) {
-                val ex = when (e) {
-                    is WebSocketException -> e
-                    is IOException -> WebSocketConnectionException("IOException : ${e.message}")
-                    else -> WebSocketConnectionException("Unknown exception : ${e.message}")
-                }
-
-                closeWith(ex)
-            }
+        private fun mapSendException(e: Throwable): WebSocketException = when (e) {
+            is WebSocketException -> e
+            is IOException -> WebSocketConnectionException("IOException : ${e.message}")
+            else -> WebSocketConnectionException("Unknown exception : ${e.message}")
         }
 
         internal suspend fun joinClose() {

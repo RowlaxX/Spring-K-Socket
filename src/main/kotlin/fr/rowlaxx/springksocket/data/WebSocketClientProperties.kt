@@ -9,11 +9,11 @@ data class WebSocketClientProperties(
     val headers: HttpHeaders,
 
     val initTimeout: Duration,
-    val pingAfter: Duration,
+    val pingInterval: Duration,
     val readTimeout: Duration,
 ) {
     init {
-        if (pingAfter.isNegative) {
+        if (pingInterval.isNegative) {
             throw IllegalArgumentException("pingInterval must be positive")
         }
         else if (initTimeout.isNegative) {

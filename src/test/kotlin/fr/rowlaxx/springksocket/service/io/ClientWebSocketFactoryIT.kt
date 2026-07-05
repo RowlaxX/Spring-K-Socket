@@ -5,7 +5,8 @@ import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketHandler
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
-import fr.rowlaxx.springkutils.concurrent.config.GlobalExecutorsConfiguration
+import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
+import kotlinx.coroutines.runBlocking
 import io.netty.channel.EventLoopGroup
 import io.netty.channel.nio.NioEventLoopGroup
 import org.asynchttpclient.AsyncHttpClient
@@ -63,7 +64,7 @@ class ClientWebSocketFactoryIT {
         override fun onMessage(webSocket: WebSocket, msg: Any) { messages += msg }
     }
 
-    private lateinit var threads: GlobalExecutorsConfiguration
+    private lateinit var threads: GlobalThreadConfiguration
     private lateinit var server: EchoServer
     private lateinit var eventLoopGroup: EventLoopGroup
     private lateinit var client: AsyncHttpClient
@@ -71,7 +72,7 @@ class ClientWebSocketFactoryIT {
 
     @BeforeEach
     fun setUp() {
-        threads = GlobalExecutorsConfiguration()
+        threads = GlobalThreadConfiguration()
         server = EchoServer(0).apply { start() }
         assertTrue(server.started.await(10, TimeUnit.SECONDS), "echo server did not start")
         // Mirror WebSocketTransportConfiguration: a single dedicated "IO" event-loop thread.
@@ -90,7 +91,10 @@ class ClientWebSocketFactoryIT {
     @AfterEach
     fun tearDown() {
         runCatching { client.close() }
-        runCatching { eventLoopGroup.shutdownGracefully() }
+        // Await termination so the single "IO-test" thread is gone before the next test's @BeforeEach —
+        // shutdownGracefully() is async (2s default quiet period) and would otherwise leak into the
+        // "single IO thread" assertion below.
+        runCatching { eventLoopGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).await(5, TimeUnit.SECONDS) }
         runCatching { server.stop(1000) }
         threads.destroy()
     }
@@ -99,7 +103,7 @@ class ClientWebSocketFactoryIT {
         uri = URI.create("ws://${InetAddress.getLoopbackAddress().hostAddress}:${server.port}"),
         headers = HttpHeaders.of(emptyMap()) { _, _ -> true },
         initTimeout = Duration.ofSeconds(10),
-        pingAfter = Duration.ofSeconds(5),
+        pingInterval = Duration.ofSeconds(5),
         readTimeout = Duration.ofSeconds(10),
     )
 
@@ -140,6 +144,48 @@ class ClientWebSocketFactoryIT {
         while (handler.messages.isEmpty() && System.nanoTime() < deadline) Thread.sleep(10)
 
         assertEquals("echo:$big", handler.messages.firstOrNull(), "64 KB frame did not round-trip in one piece")
+    }
+
+    @Test
+    fun `high-concurrency sends all round-trip through one connection`() {
+        val handler = RecordingHandler()
+        val ws = factory.connect("conc", props(), listOf(handler)) { error -> error("init failed: ${error.message}") }
+        assertTrue(handler.available.await(10, TimeUnit.SECONDS), "never became available")
+
+        val threadsN = 12
+        val perThread = 300
+        val expected = (0 until threadsN).flatMap { t -> (0 until perThread).map { "echo:m-$t-$it" } }.toSet()
+
+        val barrier = java.util.concurrent.CyclicBarrier(threadsN)
+        (0 until threadsN).map { t ->
+            Thread {
+                barrier.await()
+                repeat(perThread) { i -> ws.sendMessageAsync("m-$t-$i") }
+            }.apply { start() }
+        }.forEach { it.join() }
+
+        val total = threadsN * perThread
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (handler.messages.size < total && System.nanoTime() < deadline) Thread.sleep(10)
+
+        val received = handler.messages.map { it as String }.toSet()
+        assertEquals(total, handler.messages.size, "every concurrently-sent message must be echoed back exactly once")
+        assertEquals(expected, received, "the set of echoes must match the set of sends (no loss/corruption)")
+        ws.closeAsync("done")
+    }
+
+    @Test
+    fun `send after close returns a failed Job`() = runBlocking {
+        val handler = RecordingHandler()
+        val ws = factory.connect("failjob", props(), listOf(handler)) { _ -> }
+        assertTrue(handler.available.await(10, TimeUnit.SECONDS))
+
+        ws.closeAsync("closing")
+        assertTrue(handler.unavailable.await(10, TimeUnit.SECONDS))
+
+        val job = ws.sendMessageAsync("too late")
+        job.join()
+        assertTrue(job.isCancelled, "a send after close must return a failed Job")
     }
 
     @Test

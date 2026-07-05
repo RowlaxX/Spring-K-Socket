@@ -21,7 +21,7 @@ annotation class WebSocketServer(
     val allowedOriginPatterns: Array<String> = [],
 
     val initTimeout: String = "PT10S",
-    val pingAfter: String = "PT5S",
+    val pingInterval: String = "PT5S",
     val readTimeout: String = "PT10S"
 
 )

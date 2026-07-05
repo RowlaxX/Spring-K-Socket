@@ -8,6 +8,6 @@ data class WebSocketServerProperties(
 
     val handlerChain: List<WebSocketHandler>,
     val initTimeout: Duration,
-    val pingAfter: Duration,
+    val pingInterval: Duration,
     val readTimeout: Duration,
 )

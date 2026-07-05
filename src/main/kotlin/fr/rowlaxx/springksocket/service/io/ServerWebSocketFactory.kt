@@ -10,7 +10,8 @@ import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleClose
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandlePongMessage
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleTextMessage
 import fr.rowlaxx.springksocket.util.WebSocketSessionUtils.setHandleTransportError
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import org.springframework.stereotype.Service
 import org.springframework.web.socket.BinaryMessage
 import org.springframework.web.socket.PingMessage
@@ -44,7 +45,7 @@ class ServerWebSocketFactory(
         requestHeaders = WebSocketMapAttributesUtils.getRequestHeaders(session.attributes),
         initTimeout = config.initTimeout,
         handlerChain = config.handlerChain,
-        pingAfter = config.pingAfter,
+        pingInterval = config.pingInterval,
         readTimeout = config.readTimeout,
         attributes = WebSocketMapAttributesUtils.getOrCreateAttributes(session.attributes)
     ) {
@@ -63,19 +64,19 @@ class ServerWebSocketFactory(
             openWith(session)
         }
 
-        override fun pingNow(): Job {
+        override fun pingNow(): Deferred<Unit> {
             session.sendMessage(PingMessage())
-            return Job().also { it.complete() }
+            return CompletableDeferred(Unit)
         }
 
-        override fun sendText(msg: String): Job {
+        override fun sendText(msg: String): Deferred<Unit> {
             session.sendMessage(TextMessage(msg))
-            return Job().also { it.complete() }
+            return CompletableDeferred(Unit)
         }
 
-        override fun sendBinary(msg: ByteArray): Job {
+        override fun sendBinary(msg: ByteArray): Deferred<Unit> {
             session.sendMessage(BinaryMessage(msg))
-            return Job().also { it.complete() }
+            return CompletableDeferred(Unit)
         }
 
         override fun handleClose() {}

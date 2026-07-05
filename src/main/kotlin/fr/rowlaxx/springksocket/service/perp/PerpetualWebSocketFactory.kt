@@ -11,8 +11,8 @@ import fr.rowlaxx.springksocket.service.io.ClientWebSocketFactory
 import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
 import fr.rowlaxx.springkutils.concurrent.core.TaskQueue
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
-import kotlinx.coroutines.CompletableJob
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
 import org.springframework.stereotype.Service
 import jakarta.annotation.PreDestroy
@@ -32,6 +32,10 @@ class PerpetualWebSocketFactory(
     private val idCounter = AtomicInteger()
     private val isShutdown = AtomicBoolean()
     private val sockets = ConcurrentHashMap<Int, InternalImplementation>()
+
+    private companion object {
+        val RETRY_DELAY: Duration = Duration.ofSeconds(2)
+    }
 
     @PreDestroy
     fun shutdown() {
@@ -86,6 +90,10 @@ class PerpetualWebSocketFactory(
         private val sendQueue = TaskQueue(threads.ioDispatcher, paused = true)
 
         private val connections = LinkedList<WebSocket>()
+
+        @Volatile private var activeConnection: WebSocket? = null
+        @Volatile private var closed = false
+
         private var nextReconnection: Future<*>? = null
         private var connecting = false
         private val deduplicator = MessageDeduplicator()
@@ -133,6 +141,7 @@ class PerpetualWebSocketFactory(
             mainQueue.submit {
                 connecting = false
                 connections.add(webSocket)
+                activeConnection = webSocket
                 nextReconnection = delayed(shiftDuration, this::reconnectSafe)
                 delayed(switchDuration, this::closeOldConnections)
 
@@ -155,6 +164,7 @@ class PerpetualWebSocketFactory(
                 val removed = connections.removeIf { it.id == webSocket.id }
 
                 if (removed) {
+                    activeConnection = connections.lastOrNull { it.isConnected() }
                     if (isLast) {
                         reconnectSafe()
                     }
@@ -179,34 +189,56 @@ class PerpetualWebSocketFactory(
         }
 
         override fun isConnected(): Boolean {
-            return connections.any { it.isConnected() }
+            return activeConnection?.isConnected() == true
         }
 
-        override fun sendMessageAsync(message: Any): Job {
-            val job = Job()
-            sendMessageAsync(message, job)
+        override fun sendMessageAsync(message: Any): Deferred<Unit> {
+            val job = CompletableDeferred<Unit>()
+            trySendMessage(message, job)
             return job
         }
 
-        private fun sendMessageAsync(message: Any, job: CompletableJob) {
+        private fun trySendMessage(message: Any, job: CompletableDeferred<Unit>) {
+            if (closed) {
+                job.cancel()
+                return
+            }
+
             sendQueue.submit {
-                val ws = connections.lastOrNull { it.isConnected() }
+                if (closed) {
+                    job.cancel()
+                    return@submit
+                }
+
+                val ws = activeConnection?.takeIf { it.isConnected() }
 
                 if (ws == null) {
-                    sendMessageAsync(message, job) //Should normally be paused
+                    scheduleRetry(message, job)
                 }
                 else {
                     try {
-                        ws.sendMessageAsync(message).join()
-                        job.complete()
-                    } catch (_: Exception) {
-                        sendMessageAsync(message, job)
+                        ws.sendMessageAsync(message).await()
+                        job.complete(Unit)
+                    } catch (e: Exception) {
+                        scheduleRetry(message, job)
                     }
                 }
             }
         }
 
+        private fun scheduleRetry(message: Any, job: CompletableDeferred<Unit>) {
+            if (closed) {
+                job.cancel()
+                return
+            }
+            if (delayed(RETRY_DELAY) { trySendMessage(message, job) } == null) {
+                job.cancel()
+            }
+        }
+
         internal fun close() {
+            closed = true
+            activeConnection = null
             sendQueue.close()
             mainQueue.close()
             sockets.remove(id)

@@ -1,9 +1,9 @@
 package fr.rowlaxx.springksocket.model
 
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.Deferred
 
 interface WebSocketMessageSender {
 
-    fun sendMessageAsync(message: Any): Job
+    fun sendMessageAsync(message: Any): Deferred<Unit>
 
 }

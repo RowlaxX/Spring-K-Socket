@@ -54,7 +54,7 @@ class WebSocketServerConfiguration(
                 handlerChain = handlers,
                 initTimeout = Duration.parse(anno.initTimeout),
                 readTimeout = Duration.parse(anno.readTimeout),
-                pingAfter = Duration.parse(anno.pingAfter),
+                pingInterval = Duration.parse(anno.pingInterval),
             )
 
             val handler = SpringWebSocketHandler(
