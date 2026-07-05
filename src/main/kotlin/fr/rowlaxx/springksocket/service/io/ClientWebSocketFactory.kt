@@ -126,7 +126,6 @@ class ClientWebSocketFactory(
                     val socket = ws
 
                     if (socket == null) {
-                        log.warn("[{} ({})] Server PING arrived before socket ready; pong NOT sent", name, id)
                         return
                     }
                     val startedAt = System.nanoTime()
