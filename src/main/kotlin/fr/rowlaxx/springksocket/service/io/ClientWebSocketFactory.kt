@@ -96,8 +96,17 @@ class ClientWebSocketFactory(
                 override fun onTextFrame(payload: String, finalFragment: Boolean, rsv: Int) {
                     onDataReceived()
                     if (finalFragment && textBuffer.isEmpty()) {
+                        if (payload.length > MAX_MESSAGE_SIZE_BYTES) {
+                            closeOversizedMessage()
+                            return
+                        }
                         acceptMessage(payload)
                     } else {
+                        if (textBuffer.length.toLong() + payload.length > MAX_MESSAGE_SIZE_BYTES) {
+                            textBuffer.setLength(0)
+                            closeOversizedMessage()
+                            return
+                        }
                         textBuffer.append(payload)
                         if (finalFragment) {
                             val msg = textBuffer.toString()
@@ -110,8 +119,17 @@ class ClientWebSocketFactory(
                 override fun onBinaryFrame(payload: ByteArray, finalFragment: Boolean, rsv: Int) {
                     onDataReceived()
                     if (finalFragment && binaryBuffer.size() == 0) {
+                        if (payload.size > MAX_MESSAGE_SIZE_BYTES) {
+                            closeOversizedMessage()
+                            return
+                        }
                         acceptMessage(payload)
                     } else {
+                        if (binaryBuffer.size().toLong() + payload.size > MAX_MESSAGE_SIZE_BYTES) {
+                            binaryBuffer.reset()
+                            closeOversizedMessage()
+                            return
+                        }
                         binaryBuffer.write(payload)
                         if (finalFragment) {
                             val msg = binaryBuffer.toByteArray()
@@ -160,6 +178,12 @@ class ClientWebSocketFactory(
 
         override fun sendBinary(msg: ByteArray): Deferred<Unit> = sendJob { it.sendBinaryFrame(msg) }
 
+        private fun closeOversizedMessage() {
+            textBuffer.setLength(0)
+            binaryBuffer.reset()
+            closeWith(WebSocketConnectionException("Incoming message exceeds the maximum allowed size of $MAX_MESSAGE_SIZE_BYTES bytes"))
+        }
+
         override fun handleClose() {
             ws?.takeIf { it.isOpen }?.sendCloseFrame()
 
@@ -190,5 +214,8 @@ class ClientWebSocketFactory(
     private companion object {
         /** Above this, a send/pong is slow enough to threaten a broker keepalive deadline. */
         const val KEEPALIVE_WARN_MS = 1_000L
+
+        /** Hard ceiling on a single (possibly fragmented) inbound message; guards against unbounded reassembly buffers. */
+        const val MAX_MESSAGE_SIZE_BYTES = 10 * 1024 * 1024
     }
 }

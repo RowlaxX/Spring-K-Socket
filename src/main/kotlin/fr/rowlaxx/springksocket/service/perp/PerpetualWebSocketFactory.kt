@@ -14,6 +14,7 @@ import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 import jakarta.annotation.PreDestroy
 import java.time.Duration
@@ -35,6 +36,12 @@ class PerpetualWebSocketFactory(
 
     private companion object {
         val RETRY_DELAY: Duration = Duration.ofSeconds(2)
+        const val DEDUPLICATOR_CLEAR_INTERVAL_MS = 5000L
+    }
+
+    @Scheduled(fixedRate = DEDUPLICATOR_CLEAR_INTERVAL_MS)
+    fun clearDeduplicators() {
+        sockets.values.forEach { it.clearDeduplicator() }
     }
 
     @PreDestroy
@@ -94,7 +101,8 @@ class PerpetualWebSocketFactory(
         @Volatile private var activeConnection: WebSocket? = null
         @Volatile private var closed = false
 
-        private var nextReconnection: Future<*>? = null
+        @Volatile private var nextReconnection: Future<*>? = null
+        @Volatile private var nextSwitch: Future<*>? = null
         private var connecting = false
         private val deduplicator = MessageDeduplicator()
 
@@ -143,7 +151,7 @@ class PerpetualWebSocketFactory(
                 connections.add(webSocket)
                 activeConnection = webSocket
                 nextReconnection = delayed(shiftDuration, this::reconnectSafe)
-                delayed(switchDuration, this::closeOldConnections)
+                nextSwitch = delayed(switchDuration, this::closeOldConnections)
 
                 if (connections.size == 1) {
                     sendQueue.resume()
@@ -186,6 +194,10 @@ class PerpetualWebSocketFactory(
                     handler.onMessage(this, deserialized)
                 }
             }
+        }
+
+        fun clearDeduplicator() {
+            mainQueue.submit { deduplicator.clear() }
         }
 
         override fun isConnected(): Boolean {
@@ -239,6 +251,10 @@ class PerpetualWebSocketFactory(
         internal fun close() {
             closed = true
             activeConnection = null
+            nextReconnection?.cancel(true)
+            nextReconnection = null
+            nextSwitch?.cancel(true)
+            nextSwitch = null
             sendQueue.close()
             mainQueue.close()
             sockets.remove(id)
