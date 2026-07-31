@@ -240,7 +240,15 @@ class BaseWebSocketFactoryTest {
 
         val total = 200_000
         val start = System.nanoTime()
-        repeat(total) { socket.sendMessageAsync("m$it") }
+        repeat(total) {
+            // The send queue REJECTS beyond its bounded buffer (by design). Rejection is synchronous,
+            // so back off and retry: this measures sustained drain throughput, not buffer capacity.
+            while (true) {
+                val job = socket.sendMessageAsync("m$it")
+                if (!job.isCancelled) break
+                Thread.sleep(1)
+            }
+        }
 
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         while (socket.sentText.size < total && System.nanoTime() < deadline) Thread.sleep(5)

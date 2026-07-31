@@ -18,7 +18,9 @@ import org.asynchttpclient.ws.WebSocketUpgradeHandler
 import org.springframework.stereotype.Service
 import tools.jackson.core.util.ByteArrayBuilder
 import java.time.Duration
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.asynchttpclient.ws.WebSocket as AhcWebSocket
 
 @Service
@@ -27,15 +29,55 @@ class ClientWebSocketFactory(
     private val threads: GlobalThreadConfiguration,
     private val httpClient: AsyncHttpClient,
 ) {
+    /**
+     * Cancellation handle for a [connectFailsafe] retry loop. [cancel] guarantees that no further
+     * connection attempt will be scheduled by this loop, and removes any retry already pending on
+     * the shared scheduler so it stops pinning the handler chain.
+     */
+    class FailsafeConnection internal constructor() {
+        @Volatile internal var cancelled = false
+            private set
+        internal val pendingRetry = AtomicReference<Future<*>?>()
+
+        fun cancel() {
+            cancelled = true
+            pendingRetry.getAndSet(null)?.cancel(false)
+        }
+    }
+
     fun connectFailsafe(
         name: String,
         properties: WebSocketClientProperties,
         handlerChain: List<WebSocketHandler>,
+    ): FailsafeConnection {
+        val handle = FailsafeConnection()
+        connectWithRetry(handle, name, properties, handlerChain)
+        return handle
+    }
+
+    private fun connectWithRetry(
+        handle: FailsafeConnection,
+        name: String,
+        properties: WebSocketClientProperties,
+        handlerChain: List<WebSocketHandler>,
     ) {
+        if (handle.cancelled) {
+            return
+        }
         connect(name, properties, handlerChain) {
-            threads.taskScheduler.scheduledExecutor.schedule({
-                connectFailsafe(name, properties, handlerChain)
-            }, 2000, TimeUnit.MILLISECONDS)
+            if (handle.cancelled) {
+                return@connect
+            }
+            val retry = runCatching {
+                threads.taskScheduler.scheduledExecutor.schedule({
+                    handle.pendingRetry.set(null)
+                    connectWithRetry(handle, name, properties, handlerChain)
+                }, RETRY_DELAY_MS, TimeUnit.MILLISECONDS)
+            }.getOrNull() ?: return@connect // scheduler shut down: stop retrying
+            handle.pendingRetry.set(retry)
+            if (handle.cancelled) { // cancel() may have raced the schedule
+                retry.cancel(false)
+            }
         }
     }
 
@@ -217,5 +259,8 @@ class ClientWebSocketFactory(
 
         /** Hard ceiling on a single (possibly fragmented) inbound message; guards against unbounded reassembly buffers. */
         const val MAX_MESSAGE_SIZE_BYTES = 10 * 1024 * 1024
+
+        /** Delay between two failsafe connection attempts. */
+        const val RETRY_DELAY_MS = 2_000L
     }
 }

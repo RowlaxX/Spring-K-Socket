@@ -14,8 +14,8 @@ import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
-import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
+import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import java.time.Duration
 import java.util.*
@@ -34,12 +34,30 @@ class PerpetualWebSocketFactory(
     private val isShutdown = AtomicBoolean()
     private val sockets = ConcurrentHashMap<Int, InternalImplementation>()
 
+    @Volatile
+    private var deduplicatorCleaner: Future<*>? = null
+
     private companion object {
         val RETRY_DELAY: Duration = Duration.ofSeconds(2)
         const val DEDUPLICATOR_CLEAR_INTERVAL_MS = 5000L
     }
 
-    @Scheduled(fixedRate = DEDUPLICATOR_CLEAR_INTERVAL_MS)
+    /**
+     * Self-schedules the periodic deduplicator cleanup on the shared scheduler. The library cannot
+     * use `@Scheduled` for this: nothing in spring-k-socket enables Spring scheduling, so in a
+     * consuming application without `@EnableScheduling` the annotation would silently never fire and
+     * a long-lived connection overlap would accumulate deduplicator entries unboundedly.
+     */
+    @PostConstruct
+    fun start() {
+        deduplicatorCleaner = threads.taskScheduler.scheduledExecutor.scheduleAtFixedRate(
+            { runCatching { clearDeduplicators() }.onFailure { log.warn("Deduplicator cleanup failed", it) } },
+            DEDUPLICATOR_CLEAR_INTERVAL_MS,
+            DEDUPLICATOR_CLEAR_INTERVAL_MS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
     fun clearDeduplicators() {
         sockets.values.forEach { it.clearDeduplicator() }
     }
@@ -47,6 +65,8 @@ class PerpetualWebSocketFactory(
     @PreDestroy
     fun shutdown() {
         isShutdown.set(true)
+        deduplicatorCleaner?.cancel(false)
+        deduplicatorCleaner = null
         runBlocking {
             while (sockets.isNotEmpty()) {
                 sockets.values.toList()
@@ -79,8 +99,15 @@ class PerpetualWebSocketFactory(
             propertiesFactory = propertiesFactory,
         )
 
-        instance.reconnectSafe()
+        // Register BEFORE connecting: otherwise a concurrent shutdown() could snapshot `sockets`
+        // between reconnectSafe() and the registration and never close this instance.
         sockets[id] = instance
+        if (isShutdown.get()) {
+            sockets.remove(id)
+            instance.close()
+            throw IllegalStateException("Application is shutting down")
+        }
+        instance.reconnectSafe()
         return instance
     }
 
@@ -103,6 +130,7 @@ class PerpetualWebSocketFactory(
 
         @Volatile private var nextReconnection: Future<*>? = null
         @Volatile private var nextSwitch: Future<*>? = null
+        @Volatile private var failsafe: ClientWebSocketFactory.FailsafeConnection? = null
         private var connecting = false
         private val deduplicator = MessageDeduplicator()
 
@@ -122,14 +150,14 @@ class PerpetualWebSocketFactory(
 
         fun reconnectSafe() {
             mainQueue.submit {
-                if (connecting) {
+                if (closed || connecting) {
                     return@submit
                 }
 
                 connecting = true
                 nextReconnection?.cancel(true)
                 nextReconnection = null
-                webSocketFactory.connectFailsafe(name, propertiesFactory(), handlerChain)
+                failsafe = webSocketFactory.connectFailsafe(name, propertiesFactory(), handlerChain)
             }
         }
 
@@ -146,7 +174,16 @@ class PerpetualWebSocketFactory(
         }
 
         private fun acceptOpeningConnection(webSocket: WebSocket) {
+            if (closed) {
+                // A connection attempt that was in flight when this perpetual closed: orphan, close it.
+                webSocket.closeAsync("Perpetual socket closed", 1000)
+                return
+            }
             mainQueue.submit {
+                if (closed) {
+                    webSocket.closeAsync("Perpetual socket closed", 1000)
+                    return@submit
+                }
                 connecting = false
                 connections.add(webSocket)
                 activeConnection = webSocket
@@ -216,7 +253,7 @@ class PerpetualWebSocketFactory(
                 return
             }
 
-            sendQueue.submit {
+            val submitted = sendQueue.submit {
                 if (closed) {
                     job.cancel()
                     return@submit
@@ -236,6 +273,13 @@ class PerpetualWebSocketFactory(
                     }
                 }
             }
+            // The queue may reject the task (saturated: RejectedExecutionException) or drop it
+            // (closed: CancellationException). The caller's Deferred must fail, never hang silently.
+            submitted.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    job.completeExceptionally(cause)
+                }
+            }
         }
 
         private fun scheduleRetry(message: Any, job: CompletableDeferred<Unit>) {
@@ -251,10 +295,19 @@ class PerpetualWebSocketFactory(
         internal fun close() {
             closed = true
             activeConnection = null
+            failsafe?.cancel()
+            failsafe = null
             nextReconnection?.cancel(true)
             nextReconnection = null
             nextSwitch?.cancel(true)
             nextSwitch = null
+            // Close the live underlying connections so they (and this instance, via the handler
+            // chain) do not stay registered in BaseWebSocketFactory until application shutdown.
+            // Submitted before close(): TaskQueue still runs already-enqueued tasks after close.
+            mainQueue.submit {
+                connections.forEach { it.closeAsync("Perpetual socket closed", 1000) }
+                connections.clear()
+            }
             sendQueue.close()
             mainQueue.close()
             sockets.remove(id)

@@ -8,6 +8,8 @@ import fr.rowlaxx.springksocket.model.WebSocketSerializer
 import fr.rowlaxx.springksocket.service.io.BaseWebSocketFactory
 import fr.rowlaxx.springksocket.service.io.ClientWebSocketFactory
 import fr.rowlaxx.springkutils.concurrent.config.GlobalThreadConfiguration
+import io.netty.channel.EventLoopGroup
+import io.netty.channel.nio.NioEventLoopGroup
 import org.asynchttpclient.AsyncHttpClient
 import org.asynchttpclient.DefaultAsyncHttpClientConfig
 import org.asynchttpclient.Dsl
@@ -30,7 +32,9 @@ import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * End-to-end tests for [PerpetualWebSocketFactory] over a real loopback echo server and the real
@@ -60,6 +64,35 @@ class PerpetualWebSocketFactoryIT {
         override fun onMessage(conn: JWebSocket, message: ByteBuffer) {}
     }
 
+    /** Echo-less server that lets the test broadcast an identical stream to every open connection. */
+    private class BroadcastServer(port: Int) :
+        WebSocketServer(InetSocketAddress(InetAddress.getLoopbackAddress(), port)) {
+        val started = CountDownLatch(1)
+        val twoConnected = CountDownLatch(2)
+        override fun onStart() { started.countDown() }
+        override fun onOpen(conn: JWebSocket, handshake: ClientHandshake) { twoConnected.countDown() }
+        override fun onClose(conn: JWebSocket, code: Int, reason: String?, remote: Boolean) {}
+        override fun onError(conn: JWebSocket?, ex: Exception) {}
+        override fun onMessage(conn: JWebSocket, message: String) {}
+        override fun onMessage(conn: JWebSocket, message: ByteBuffer) {}
+
+        /** Sends [msg] to every currently open connection, like an upstream fanning out its stream. */
+        fun sendToAll(msg: String) {
+            connections.filter { it.isOpen }.forEach { runCatching { it.send(msg) } }
+        }
+    }
+
+    private class CountingHandler : PerpetualWebSocketHandler {
+        override val serializer = WebSocketSerializer.Passthrough
+        override val deserializer = WebSocketDeserializer.Passthrough
+        val counts = ConcurrentHashMap<String, AtomicInteger>()
+        val available = CountDownLatch(1)
+        override fun onAvailable(webSocket: PerpetualWebSocket) { available.countDown() }
+        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {
+            counts.computeIfAbsent(msg as String) { AtomicInteger() }.incrementAndGet()
+        }
+    }
+
     private class RecordingHandler : PerpetualWebSocketHandler {
         override val serializer = WebSocketSerializer.Passthrough
         override val deserializer = WebSocketDeserializer.Passthrough
@@ -70,15 +103,20 @@ class PerpetualWebSocketFactoryIT {
     }
 
     private lateinit var threads: GlobalThreadConfiguration
+    private lateinit var eventLoopGroup: EventLoopGroup
     private lateinit var client: AsyncHttpClient
     private lateinit var factory: PerpetualWebSocketFactory
 
     @BeforeEach
     fun setUp() {
         threads = GlobalThreadConfiguration()
+        // Mirror WebSocketTransportConfiguration: a single dedicated "IO" event-loop thread.
+        // (async-http-client does not accept the MultiThreadIoEventLoopGroup that
+        // GlobalThreadConfiguration.ioEventLoopGroup provides.)
+        eventLoopGroup = NioEventLoopGroup(1, ThreadFactory { r -> Thread(r, "IO-perp-test").apply { isDaemon = true } })
         client = Dsl.asyncHttpClient(
             DefaultAsyncHttpClientConfig.Builder()
-                .setEventLoopGroup(threads.ioEventLoopGroup)
+                .setEventLoopGroup(eventLoopGroup)
                 .setRequestTimeout(Duration.ofMillis(-1))
                 .setReadTimeout(Duration.ofMillis(-1))
                 .setWebSocketMaxFrameSize(16 * 1024 * 1024)
@@ -91,6 +129,7 @@ class PerpetualWebSocketFactoryIT {
     fun tearDown() {
         runCatching { factory.shutdown() }
         runCatching { client.close() }
+        runCatching { eventLoopGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).await(5, TimeUnit.SECONDS) }
         threads.destroy()
     }
 
@@ -189,6 +228,63 @@ class PerpetualWebSocketFactoryIT {
             val missing = expected - server.received
             assertTrue(missing.isEmpty(), "under concurrency, ${missing.size} messages were lost e.g. ${missing.take(5)}")
             assertEquals(expected.size, server.received.count { it.startsWith("m-") }, "no duplicates expected on a single connection")
+        } finally {
+            server.stop(1000)
+        }
+    }
+
+    /**
+     * Exactly-once delivery during a shift: with a short shiftDuration a second physical connection
+     * opens while the first is still live, and the server pushes the *same stream* to every open
+     * connection — exactly what a real upstream does during the overlap window. The handler must
+     * observe each unique message exactly once, and a genuine repeat in the stream (the same payload
+     * occurring twice upstream) must be delivered twice, not swallowed by the deduplicator.
+     */
+    @Test
+    fun `overlapping connections deliver the shared stream exactly once, repeats included`() {
+        val server = BroadcastServer(0).apply { start() }
+        assertTrue(server.started.await(10, TimeUnit.SECONDS))
+        try {
+            val handler = CountingHandler()
+            factory.create(
+                name = "perp-overlap",
+                initializers = emptyList(),
+                handler = handler,
+                propertiesFactory = props(server.port),
+                // Short shift so a second physical connection opens ~2s after the first; long
+                // switch so both stay open well past the broadcast below.
+                shiftDuration = Duration.ofSeconds(2),
+                switchDuration = Duration.ofSeconds(20),
+            )
+            assertTrue(handler.available.await(15, TimeUnit.SECONDS), "perpetual never became available")
+            assertTrue(server.twoConnected.await(15, TimeUnit.SECONDS), "the shift never opened a second connection")
+
+            // Both connections are live: push the same stream to each of them. The stream contains
+            // 150 unique messages plus the payload "rep" occurring twice (a genuine upstream repeat).
+            val unique = (0 until 150).map { "u-$it" }
+            unique.forEachIndexed { i, msg ->
+                server.sendToAll(msg)
+                if (i == 50 || i == 100) server.sendToAll("rep")
+            }
+
+            // Wait until everything sent has been seen at least once, then settle so any late
+            // duplicate copy (from the second connection) would have time to arrive.
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+            fun allSeen() = unique.all { (handler.counts[it]?.get() ?: 0) >= 1 } &&
+                (handler.counts["rep"]?.get() ?: 0) >= 2
+            while (!allSeen() && System.nanoTime() < deadline) Thread.sleep(50)
+            assertTrue(
+                allSeen(),
+                "stream messages were swallowed during the overlap: " +
+                    "missing=${unique.count { (handler.counts[it]?.get() ?: 0) == 0 }}, " +
+                    "rep=${handler.counts["rep"]?.get() ?: 0}"
+            )
+            Thread.sleep(1500)
+
+            val duplicated = unique.filter { (handler.counts[it]?.get() ?: 0) > 1 }
+            assertTrue(duplicated.isEmpty(), "messages delivered more than once during overlap: ${duplicated.take(5)}")
+            unique.forEach { assertEquals(1, handler.counts[it]?.get(), "message $it must be delivered exactly once") }
+            assertEquals(2, handler.counts["rep"]?.get(), "a genuine repeat in the stream must be delivered twice")
         } finally {
             server.stop(1000)
         }

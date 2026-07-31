@@ -127,10 +127,8 @@ class KeepaliveStarvationIT {
         val server = LoadServer(0).apply { start() }
         assertTrue(server.started.await(10, TimeUnit.SECONDS), "server did not start")
 
-        val eventLoopGroup = threads.ioEventLoopGroup
         val client: AsyncHttpClient = Dsl.asyncHttpClient(
             DefaultAsyncHttpClientConfig.Builder()
-                .setEventLoopGroup(eventLoopGroup)
                 .setRequestTimeout(Duration.ofMillis(-1))
                 .setReadTimeout(Duration.ofMillis(-1))
                 .setWebSocketMaxFrameSize(16 * 1024 * 1024)
@@ -200,7 +198,6 @@ class KeepaliveStarvationIT {
 
         val client: AsyncHttpClient = Dsl.asyncHttpClient(
             DefaultAsyncHttpClientConfig.Builder()
-                .setEventLoopGroup(threads.ioEventLoopGroup)
                 .setRequestTimeout(Duration.ofMillis(-1))
                 .setReadTimeout(Duration.ofMillis(-1))
                 .build()

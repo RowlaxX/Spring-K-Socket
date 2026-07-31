@@ -73,6 +73,7 @@ class ServerWebSocketFactoryTest {
         private val inWrite = AtomicInteger()
         val maxConcurrentWrite = AtomicInteger()
         @Volatile private var open = true
+        @Volatile var closedWith: CloseStatus? = null
 
         init {
             attrs["uri"] = URI.create("ws://localhost/test")
@@ -104,8 +105,8 @@ class ServerWebSocketFactoryTest {
         override fun getBinaryMessageSizeLimit(): Int = 0
         override fun getExtensions(): MutableList<WebSocketExtension> = mutableListOf()
         override fun isOpen(): Boolean = open
-        override fun close() { open = false }
-        override fun close(status: CloseStatus) { open = false }
+        override fun close() { open = false; closedWith = CloseStatus.NO_STATUS_CODE }
+        override fun close(status: CloseStatus) { open = false; closedWith = status }
     }
 
     private fun props(handler: WebSocketHandler) = WebSocketServerProperties(
@@ -161,6 +162,22 @@ class ServerWebSocketFactoryTest {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (handler.messages.isEmpty() && System.nanoTime() < deadline) Thread.sleep(10)
         assertEquals("ping-from-client", handler.messages.firstOrNull())
+    }
+
+    @Test
+    fun `server-initiated close actually closes the underlying session`() {
+        val handler = RecordingHandler()
+        val session = FakeSession()
+        val ws = factory.wrap(session, props(handler))
+        assertTrue(handler.available.await(5, TimeUnit.SECONDS))
+
+        ws.closeAsync("done with you", 1000)
+
+        assertTrue(handler.unavailable.await(5, TimeUnit.SECONDS), "socket never became unavailable")
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (session.isOpen && System.nanoTime() < deadline) Thread.sleep(10)
+        assertTrue(!session.isOpen, "closeAsync must close the underlying servlet session, not just mark the wrapper closed")
+        assertEquals(1000, session.closedWith?.code, "the application close code must reach the peer")
     }
 
     @Test

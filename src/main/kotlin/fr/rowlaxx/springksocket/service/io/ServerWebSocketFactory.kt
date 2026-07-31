@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import org.springframework.stereotype.Service
 import org.springframework.web.socket.BinaryMessage
+import org.springframework.web.socket.CloseStatus
 import org.springframework.web.socket.PingMessage
 import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketSession
@@ -79,9 +80,25 @@ class ServerWebSocketFactory(
             return CompletableDeferred(Unit)
         }
 
-        override fun handleClose() {}
+        override fun handleClose() {
+            if (!session.isOpen) return
+            val reason = getClosedReason()
+            // Only codes the RFC allows on the wire; 1005/1006 and transport failures map to 1011.
+            val status = if (reason is WebSocketClosedException && reason.code in 1000..4999 && reason.code != 1005 && reason.code != 1006) {
+                CloseStatus(reason.code, reason.reason.take(MAX_REASON_LENGTH))
+            } else {
+                CloseStatus.SERVER_ERROR.withReason(reason?.message.orEmpty().take(MAX_REASON_LENGTH))
+            }
+            runCatching { session.close(status) }
+        }
+
         override fun handleOpen(obj: Any) {}
 
+    }
+
+    private companion object {
+        /** RFC 6455: a close reason must fit in 123 UTF-8 bytes. */
+        const val MAX_REASON_LENGTH = 123
     }
 
 }
