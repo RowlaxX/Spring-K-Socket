@@ -256,6 +256,7 @@ class PerpetualWebSocketFactoryIT {
                 // switch so both stay open well past the broadcast below.
                 shiftDuration = Duration.ofSeconds(2),
                 switchDuration = Duration.ofSeconds(20),
+                dedupe = true,
             )
             assertTrue(handler.available.await(15, TimeUnit.SECONDS), "perpetual never became available")
             assertTrue(server.twoConnected.await(15, TimeUnit.SECONDS), "the shift never opened a second connection")

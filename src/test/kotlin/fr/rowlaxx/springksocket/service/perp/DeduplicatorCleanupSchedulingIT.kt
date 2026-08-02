@@ -119,6 +119,7 @@ class DeduplicatorCleanupSchedulingIT {
                 },
                 shiftDuration = Duration.ofHours(1),
                 switchDuration = Duration.ofHours(1),
+                dedupe = true,
             )
 
             // Reach into the live deduplicator and plant an ancient bucket (key 1 is far older than

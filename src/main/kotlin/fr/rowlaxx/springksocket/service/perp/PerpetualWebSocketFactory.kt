@@ -83,6 +83,7 @@ class PerpetualWebSocketFactory(
         propertiesFactory: () -> WebSocketClientProperties,
         shiftDuration: Duration,
         switchDuration: Duration,
+        dedupe: Boolean = false,
     ): PerpetualWebSocket {
         if (isShutdown.get()) {
             throw IllegalStateException("Application is shutting down")
@@ -97,6 +98,7 @@ class PerpetualWebSocketFactory(
             shiftDuration = shiftDuration,
             switchDuration = switchDuration,
             propertiesFactory = propertiesFactory,
+            dedupe = dedupe,
         )
 
         // Register BEFORE connecting: otherwise a concurrent shutdown() could snapshot `sockets`
@@ -118,7 +120,8 @@ class PerpetualWebSocketFactory(
         override val switchDuration: Duration,
         override val propertiesFactory: () -> WebSocketClientProperties,
         override val initializers: List<WebSocketHandler>,
-        override val handler: PerpetualWebSocketHandler
+        override val handler: PerpetualWebSocketHandler,
+        dedupe: Boolean,
     ) : PerpetualWebSocket {
         private val mainQueue = TaskQueue(threads.ioDispatcher)
         private val sendQueue = TaskQueue(threads.ioDispatcher, paused = true)
@@ -132,7 +135,7 @@ class PerpetualWebSocketFactory(
         @Volatile private var nextSwitch: Future<*>? = null
         @Volatile private var failsafe: ClientWebSocketFactory.FailsafeConnection? = null
         private var connecting = false
-        private val deduplicator = MessageDeduplicator()
+        private val deduplicator = if (dedupe) MessageDeduplicator() else null
 
         init {
             if (shiftDuration.isNegative) throw IllegalArgumentException("shiftDuration must be a positive duration")
@@ -223,7 +226,7 @@ class PerpetualWebSocketFactory(
                         reconnectSafe()
                     }
                     if (totalConnections() <= 1) {
-                        deduplicator.reset()
+                        deduplicator?.reset()
                     }
                     if (connections.isEmpty()) {
                         sendQueue.pause()
@@ -235,7 +238,7 @@ class PerpetualWebSocketFactory(
 
         private fun acceptMessage(webSocket: WebSocket, msg: Any) {
             mainQueue.submit {
-                if (totalConnections() <= 1 || (totalConnections() > 1 && deduplicator.accept(msg, webSocket.id))) {
+                if (deduplicator == null || totalConnections() <= 1 || deduplicator.accept(msg, webSocket.id)) {
                     val deserialized = handler.deserializer.fromStringOrByteArray(msg)
                     handler.onMessage(this, webSocket, deserialized)
                 }
@@ -243,6 +246,7 @@ class PerpetualWebSocketFactory(
         }
 
         fun clearDeduplicator() {
+            if (deduplicator == null) return
             mainQueue.submit { deduplicator.clear() }
         }
 

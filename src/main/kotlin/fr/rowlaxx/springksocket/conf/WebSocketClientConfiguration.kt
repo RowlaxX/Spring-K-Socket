@@ -53,7 +53,8 @@ class WebSocketClientConfiguration(
                 handler = handler,
                 propertiesFactory = properties,
                 shiftDuration = Duration.parse(anno.shiftDuration),
-                switchDuration = Duration.parse(anno.switchDuration)
+                switchDuration = Duration.parse(anno.switchDuration),
+                dedupe = anno.dedupe
             )
 
             perpetualManager.set(bean, perpWS)

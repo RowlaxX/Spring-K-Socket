@@ -24,7 +24,9 @@ annotation class WebSocketClient(
     val readTimeout: String = "PT15S",
 
     val shiftDuration: String = "PT4H",
-    val switchDuration: String = "PT3S"
+    val switchDuration: String = "PT3S",
+
+    val dedupe: Boolean = false
 
 ) {
     @Retention(AnnotationRetention.RUNTIME)
