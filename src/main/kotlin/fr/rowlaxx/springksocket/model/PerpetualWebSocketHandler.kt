@@ -8,6 +8,8 @@ interface PerpetualWebSocketHandler {
 
     fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {}
 
+    fun onShift(webSocket: PerpetualWebSocket, previous: WebSocket?, next: WebSocket?) {}
+
     fun onUnavailable(webSocket: PerpetualWebSocket) {}
 
 }

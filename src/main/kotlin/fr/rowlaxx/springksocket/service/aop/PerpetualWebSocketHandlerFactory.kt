@@ -2,6 +2,7 @@ package fr.rowlaxx.springksocket.service.aop
 
 import fr.rowlaxx.springksocket.annotation.OnAvailable
 import fr.rowlaxx.springksocket.annotation.OnMessage
+import fr.rowlaxx.springksocket.annotation.OnShift
 import fr.rowlaxx.springksocket.annotation.OnUnavailable
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
@@ -31,6 +32,9 @@ class PerpetualWebSocketHandlerFactory() {
         val unavailable = ReflectionUtils.findMethodsWithAnnotation(bean, OnUnavailable::class)
             .map { it.second.toInjectionSupport() }
 
+        val shift = ReflectionUtils.findMethodsWithAnnotation(bean, OnShift::class)
+            .map { it.second.toInjectionSupport() }
+
         if (available.isEmpty() && unavailable.isEmpty() && onMessage.isEmpty()) {
             throw IllegalArgumentException("Bean ${bean::class.simpleName} is not a PerpetualWebSocketHandler. Please add at least one @OnAvailable, @OnUnavailable or @OnMessage method")
         }
@@ -39,6 +43,7 @@ class PerpetualWebSocketHandlerFactory() {
             available = available,
             unavailable = unavailable,
             message = onMessage,
+            shift = shift,
             serializer = serializer,
             deserializer = deserializer,
             bean = bean
@@ -52,6 +57,7 @@ class PerpetualWebSocketHandlerFactory() {
         private val available: List<InjectionUtils.Injection>,
         private val unavailable: List<InjectionUtils.Injection>,
         private val message: List<InjectionUtils.Injection>,
+        private val shift: List<InjectionUtils.Injection>,
     ) : PerpetualWebSocketHandler {
 
         private val handlersByMessageType = HashMap<Class<*>, List<InjectionUtils.Injection>>()
@@ -89,12 +95,30 @@ class PerpetualWebSocketHandlerFactory() {
             return resolved
         }
 
+        override fun onShift(webSocket: PerpetualWebSocket, previous: WebSocket?, next: WebSocket?) {
+            shift.forEach {
+                runShift(it, webSocket, previous, next)
+            }
+        }
+
         override fun onUnavailable(webSocket: PerpetualWebSocket) {
             val args = arrayOf(webSocket)
 
             unavailable.forEach {
                 runInWS(it, webSocket, *args)
             }
+        }
+
+        private fun runShift(scheme: InjectionUtils.Injection, ws: PerpetualWebSocket, previous: WebSocket?, next: WebSocket?) {
+            val ordered = arrayOf(previous, next)
+            var index = 0
+            runCatching { scheme.invoke(bean) { _, _ -> ordered.getOrNull(index++) } }
+                .onFailure { log.error("Method ${scheme.method} threw an exception", it) }
+                .onSuccess {
+                    if (it != null && it != Unit) {
+                        ws.sendMessageAsync(it)
+                    }
+                }
         }
 
         private fun runInWS(scheme: InjectionUtils.Injection, ws: PerpetualWebSocket, vararg args: Any?) {

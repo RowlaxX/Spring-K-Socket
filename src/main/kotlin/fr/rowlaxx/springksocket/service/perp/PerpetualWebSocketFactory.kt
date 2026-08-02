@@ -185,6 +185,7 @@ class PerpetualWebSocketFactory(
                     return@submit
                 }
                 connecting = false
+                val previous = activeConnection
                 connections.add(webSocket)
                 activeConnection = webSocket
                 nextReconnection = delayed(shiftDuration, this::reconnectSafe)
@@ -194,6 +195,8 @@ class PerpetualWebSocketFactory(
                     sendQueue.resume()
                     handler.onAvailable(this)
                 }
+
+                handler.onShift(this, previous, webSocket)
             }
         }
 
@@ -209,7 +212,13 @@ class PerpetualWebSocketFactory(
                 val removed = connections.removeIf { it.id == webSocket.id }
 
                 if (removed) {
-                    activeConnection = connections.lastOrNull { it.isConnected() }
+                    val previous = activeConnection
+                    val next = connections.lastOrNull { it.isConnected() }
+                    activeConnection = next
+
+                    if (previous !== next) {
+                        handler.onShift(this, previous, next)
+                    }
                     if (isLast) {
                         reconnectSafe()
                     }
