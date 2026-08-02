@@ -163,9 +163,10 @@ class ServiceAopTest {
             .extract(bean, WebSocketSerializer.Passthrough, WebSocketDeserializer.Passthrough)
 
         val ws = FakePerpetualWebSocket()
-        handler.onMessage(ws, "hello")
-        handler.onMessage(ws, "hello2") // second call of same type exercises the memoized path
-        handler.onMessage(ws, Ticker("BTC"))
+        val conn = FakeWebSocket()
+        handler.onMessage(ws, conn, "hello")
+        handler.onMessage(ws, conn, "hello2") // second call of same type exercises the memoized path
+        handler.onMessage(ws, conn, Ticker("BTC"))
 
         assertEquals(listOf("hello", "hello2"), bean.strings.toList())
         assertEquals(listOf(Ticker("BTC")), bean.tickers.toList())
@@ -178,7 +179,28 @@ class ServiceAopTest {
         val handler = PerpetualWebSocketHandlerFactory()
             .extract(bean, WebSocketSerializer.Passthrough, WebSocketDeserializer.Passthrough)
         // Int has no @OnMessage handler; must be a no-op, not a crash.
-        handler.onMessage(FakePerpetualWebSocket(), 42)
+        handler.onMessage(FakePerpetualWebSocket(), FakeWebSocket(), 42)
+    }
+
+    class PerpConnectionBean {
+        val connections = ConcurrentLinkedQueue<WebSocket>()
+
+        @OnMessage
+        fun onFrame(ws: WebSocket, t: Ticker) { connections += ws }
+    }
+
+    @Test
+    fun `perpetual dispatch injects the underlying connection into a WebSocket-typed parameter`() {
+        val bean = PerpConnectionBean()
+        val handler = PerpetualWebSocketHandlerFactory()
+            .extract(bean, WebSocketSerializer.Passthrough, WebSocketDeserializer.Passthrough)
+
+        val perp = FakePerpetualWebSocket()
+        val connection = FakeWebSocket()
+
+        // The underlying connection is offered to dispatch, so the WebSocket parameter is filled with it.
+        handler.onMessage(perp, connection, Ticker("BTC"))
+        assertSame(connection, bean.connections.firstOrNull(), "the underlying WebSocket must be injected")
     }
 
     // ------------------------------------------------------- HandshakeInterceptorFactory

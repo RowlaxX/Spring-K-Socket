@@ -3,6 +3,7 @@ package fr.rowlaxx.springksocket.service.perp
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
+import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
 import fr.rowlaxx.springksocket.service.io.BaseWebSocketFactory
@@ -66,7 +67,7 @@ class PerpetualLifecycleIT {
         override val deserializer = WebSocketDeserializer.Passthrough
         val available = CountDownLatch(1)
         override fun onAvailable(webSocket: PerpetualWebSocket) { available.countDown() }
-        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {}
+        override fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {}
     }
 
     private lateinit var threads: GlobalThreadConfiguration

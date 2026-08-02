@@ -228,7 +228,7 @@ class PerpetualWebSocketFactory(
             mainQueue.submit {
                 if (totalConnections() <= 1 || (totalConnections() > 1 && deduplicator.accept(msg, webSocket.id))) {
                     val deserialized = handler.deserializer.fromStringOrByteArray(msg)
-                    handler.onMessage(this, deserialized)
+                    handler.onMessage(this, webSocket, deserialized)
                 }
             }
         }

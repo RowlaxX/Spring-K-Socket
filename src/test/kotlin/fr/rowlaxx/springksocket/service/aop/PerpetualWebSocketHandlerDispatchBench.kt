@@ -39,16 +39,17 @@ class PerpetualWebSocketHandlerDispatchBench {
         val handler = PerpetualWebSocketHandlerFactory()
             .extract(BenchHandlerBean(), WebSocketSerializer.Passthrough, WebSocketDeserializer.Passthrough)
         val ws = FakePerpetualWebSocket()
+        val conn = BenchFakeWebSocket()
         val msg = BenchMsgA(1) // reused: only dispatch overhead is measured
 
-        repeat(1_000_000) { handler.onMessage(ws, msg) }
+        repeat(1_000_000) { handler.onMessage(ws, conn, msg) }
 
         val iterations = 5_000_000
         val tid = Thread.currentThread().threadId()
         val bytesBefore = bean.getThreadAllocatedBytes(tid)
         val t0 = System.nanoTime()
         for (i in 0 until iterations) {
-            handler.onMessage(ws, msg)
+            handler.onMessage(ws, conn, msg)
         }
         val nanos = System.nanoTime() - t0
         val bytes = bean.getThreadAllocatedBytes(tid) - bytesBefore

@@ -3,6 +3,7 @@ package fr.rowlaxx.springksocket.service.perp
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
+import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
 import fr.rowlaxx.springksocket.service.io.BaseWebSocketFactory
@@ -72,7 +73,7 @@ class DeduplicatorCleanupSchedulingIT {
         override val serializer = WebSocketSerializer.Passthrough
         override val deserializer = WebSocketDeserializer.Passthrough
         override fun onAvailable(webSocket: PerpetualWebSocket) {}
-        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {}
+        override fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {}
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -6,7 +6,7 @@ interface PerpetualWebSocketHandler {
 
     fun onAvailable(webSocket: PerpetualWebSocket) {}
 
-    fun onMessage(webSocket: PerpetualWebSocket, msg: Any)  {}
+    fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {}
 
     fun onUnavailable(webSocket: PerpetualWebSocket) {}
 

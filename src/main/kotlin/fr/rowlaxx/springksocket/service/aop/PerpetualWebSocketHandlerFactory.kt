@@ -5,6 +5,7 @@ import fr.rowlaxx.springksocket.annotation.OnMessage
 import fr.rowlaxx.springksocket.annotation.OnUnavailable
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
+import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
 import fr.rowlaxx.springkutils.logging.utils.LoggerExtension.log
@@ -63,23 +64,24 @@ class PerpetualWebSocketHandlerFactory() {
             }
         }
 
-        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {
+        override fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {
             if (msg == Unit) {
                 return
             }
 
             val handlers = handlersByMessageType[msg.javaClass]
-                ?: resolveHandlers(webSocket, msg.javaClass)
+                ?: resolveHandlers(webSocket, connection, msg.javaClass)
 
             for (i in handlers.indices) {
-                runInWS(handlers[i], webSocket, webSocket, msg)
+                runInWS(handlers[i], webSocket, webSocket, connection, msg)
             }
         }
 
-        private fun resolveHandlers(webSocket: PerpetualWebSocket, type: Class<*>): List<InjectionUtils.Injection> {
-            // @OnMessage methods take (PerpetualWebSocket, MessageType); selection depends only on the
-            // message class, so the result is stable per type and safe to memoize.
-            val resolved = message.filter { it.canInvoke(webSocket.javaClass, type) }
+        private fun resolveHandlers(webSocket: PerpetualWebSocket, connection: WebSocket, type: Class<*>): List<InjectionUtils.Injection> {
+            // @OnMessage methods inject from (PerpetualWebSocket, WebSocket connection, MessageType); the
+            // socket runtime types are fixed per handler, so selection depends only on the message class
+            // and is safe to memoize.
+            val resolved = message.filter { it.canInvoke(webSocket.javaClass, connection.javaClass, type) }
             if (resolved.isEmpty()) {
                 log.warn("Unhandled message of type ${type.simpleName} in bean ${bean::class.simpleName}")
             }

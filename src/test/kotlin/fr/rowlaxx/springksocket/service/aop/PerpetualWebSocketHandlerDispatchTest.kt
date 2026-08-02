@@ -71,15 +71,16 @@ class PerpetualWebSocketHandlerDispatchTest {
         val bean = TestPerpetualHandlerBean()
         val handler = handlerFor(bean)
         val ws = FakePerpetualWebSocket()
+        val conn = BenchFakeWebSocket()
 
-        handler.onMessage(ws, TradeMsg(1))
+        handler.onMessage(ws, conn, TradeMsg(1))
 
         assertEquals(1, bean.trades.get())
         assertEquals(1, bean.tradesSecond.get(), "both TradeMsg handlers should fire (fan-out)")
         assertEquals(0, bean.orderbooks.get())
         assertSame(ws, bean.lastTradeWs.get(), "the websocket must be forwarded to the handler")
 
-        handler.onMessage(ws, OrderbookMsg(1))
+        handler.onMessage(ws, conn, OrderbookMsg(1))
         assertEquals(1, bean.orderbooks.get())
         assertEquals(1, bean.trades.get(), "OrderbookMsg must not reach trade handlers")
     }
@@ -90,7 +91,7 @@ class PerpetualWebSocketHandlerDispatchTest {
         val handler = handlerFor(bean)
         val ws = FakePerpetualWebSocket()
 
-        handler.onMessage(ws, UnhandledMsg()) // no matching @OnMessage -> no-op, no throw
+        handler.onMessage(ws, BenchFakeWebSocket(), UnhandledMsg()) // no matching @OnMessage -> no-op, no throw
 
         assertEquals(0, bean.trades.get())
         assertEquals(0, bean.orderbooks.get())
@@ -100,7 +101,7 @@ class PerpetualWebSocketHandlerDispatchTest {
     fun `Unit message is ignored`() {
         val bean = TestPerpetualHandlerBean()
         val handler = handlerFor(bean)
-        handler.onMessage(FakePerpetualWebSocket(), Unit)
+        handler.onMessage(FakePerpetualWebSocket(), BenchFakeWebSocket(), Unit)
         assertEquals(0, bean.trades.get())
     }
 
@@ -109,9 +110,10 @@ class PerpetualWebSocketHandlerDispatchTest {
         val bean = TestPerpetualHandlerBean()
         val handler = handlerFor(bean)
         val ws = FakePerpetualWebSocket()
+        val conn = BenchFakeWebSocket()
 
-        repeat(1000) { handler.onMessage(ws, TradeMsg(it)) }
-        repeat(500) { handler.onMessage(ws, OrderbookMsg(it)) }
+        repeat(1000) { handler.onMessage(ws, conn, TradeMsg(it)) }
+        repeat(500) { handler.onMessage(ws, conn, OrderbookMsg(it)) }
 
         assertEquals(1000, bean.trades.get())
         assertEquals(1000, bean.tradesSecond.get())

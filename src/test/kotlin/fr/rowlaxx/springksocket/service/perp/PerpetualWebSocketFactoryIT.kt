@@ -3,6 +3,7 @@ package fr.rowlaxx.springksocket.service.perp
 import fr.rowlaxx.springksocket.data.WebSocketClientProperties
 import fr.rowlaxx.springksocket.model.PerpetualWebSocket
 import fr.rowlaxx.springksocket.model.PerpetualWebSocketHandler
+import fr.rowlaxx.springksocket.model.WebSocket
 import fr.rowlaxx.springksocket.model.WebSocketDeserializer
 import fr.rowlaxx.springksocket.model.WebSocketSerializer
 import fr.rowlaxx.springksocket.service.io.BaseWebSocketFactory
@@ -88,7 +89,7 @@ class PerpetualWebSocketFactoryIT {
         val counts = ConcurrentHashMap<String, AtomicInteger>()
         val available = CountDownLatch(1)
         override fun onAvailable(webSocket: PerpetualWebSocket) { available.countDown() }
-        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) {
+        override fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) {
             counts.computeIfAbsent(msg as String) { AtomicInteger() }.incrementAndGet()
         }
     }
@@ -99,7 +100,7 @@ class PerpetualWebSocketFactoryIT {
         val messages = ConcurrentHashMap.newKeySet<String>()
         val available = CountDownLatch(1)
         override fun onAvailable(webSocket: PerpetualWebSocket) { available.countDown() }
-        override fun onMessage(webSocket: PerpetualWebSocket, msg: Any) { messages += msg as String }
+        override fun onMessage(webSocket: PerpetualWebSocket, connection: WebSocket, msg: Any) { messages += msg as String }
     }
 
     private lateinit var threads: GlobalThreadConfiguration
